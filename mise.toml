@@ -1,0 +1,17 @@
+# Shared task vocabulary. Runtime (python 3.12) comes from uv, not mise [tools].
+
+[tasks.lint]
+description = "Lint the rbs CLI"
+run = "uv run ruff check ."
+
+[tasks.fmt]
+description = "Check formatting"
+run = "uv run black --check ."
+
+[tasks.test]
+description = "Run the rbs unit tests"
+run = "uv run pytest"
+
+[tasks.ci]
+description = "Run the full rbs pipeline on this repo (dogfood)"
+run = "uv run rbs ci"

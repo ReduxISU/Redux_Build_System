@@ -1,0 +1,7 @@
+# The hub's own config, so `rbs ci` / selftest can dogfood the engine on this repo.
+engine = "uv"
+package = "redux_build"
+
+[unit-test]
+python-versions = ["3.12", "3.13"]
+coverage-min = 0
