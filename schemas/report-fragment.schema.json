@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "rbs report fragment",
+  "description": "One operation's result, emitted by an engine and aggregated by the reporter.",
+  "type": "object",
+  "required": ["engine", "operation", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "engine": { "type": "string", "description": "Toolchain engine, e.g. uv / dotnet / npm." },
+    "operation": {
+      "type": "string",
+      "enum": ["audit", "format-check", "lint", "unit-test", "build", "integration-test", "push"]
+    },
+    "status": { "type": "string", "enum": ["success", "failure", "skipped", "warning"] },
+    "summary": { "type": "string", "description": "One-line human summary." },
+    "variant": { "type": "string", "description": "Matrix variant label, e.g. py3.12." },
+    "metrics": { "type": "object", "description": "Optional machine-readable metrics." },
+    "duration_s": { "type": "number" }
+  }
+}
