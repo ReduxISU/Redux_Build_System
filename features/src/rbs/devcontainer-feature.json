@@ -1,6 +1,6 @@
 {
   "id": "rbs",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "name": "Redux Build System (rbs)",
   "description": "Installs the rbs pipeline CLI so a repo's gates (lint, test, build, integration-test) run inside its dev container.",
   "documentationURL": "https://github.com/ReduxISU/Redux_Build_System",

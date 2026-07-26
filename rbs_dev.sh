@@ -49,8 +49,11 @@ except json.JSONDecodeError:
     cfg = json.loads(re.sub(r"^\s*//.*$", "", raw, flags=re.M))
 
 # Point the rbs feature at the local copy; leave every other feature alone.
+def is_rbs(key):
+    return key.split("@")[0].rsplit(":", 1)[0].rstrip("/").rsplit("/", 1)[-1] == "rbs"
+
 features = cfg.get("features", {})
-cfg["features"] = {("./rbs" if "features/rbs" in k else k): v for k, v in features.items()}
+cfg["features"] = {("./rbs" if is_rbs(k) else k): v for k, v in features.items()}
 
 mounts = list(cfg.get("mounts", []))
 mounts.append(f"source={os.environ['RBS_HOME']},target={os.environ['SRC_MOUNT']},type=bind")

@@ -10,7 +10,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # the action tags the repo per feature release
       packages: write
 
     steps:
@@ -23,5 +23,6 @@ jobs:
           publish-features: "true"
           base-path-to-features: "features/src"
           oci-registry: ghcr.io
+          features-namespace: reduxisu/features
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
