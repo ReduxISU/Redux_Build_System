@@ -386,6 +386,32 @@ Unimplemented operations report `skipped`, never a false pass.
 
 ## Development
 
+### `rbs_dev.sh` — testing an unreleased rbs against a real repo
+
+Maintainer tool. Runs **this working tree** against another repo, so you can iterate on an engine
+and see the effect immediately. Consumers never need it — they use the published feature.
+
+```bash
+cd ~/projects/ISU/quantumsolver
+
+~/projects/ISU/Redux_Build_System/rbs_dev.sh lint            # host: dev rbs against this repo
+~/projects/ISU/Redux_Build_System/rbs_dev.sh -c unit-test    # same, inside the repo's devcontainer
+~/projects/ISU/Redux_Build_System/rbs_dev.sh -c shell        # shell in that container
+~/projects/ISU/Redux_Build_System/rbs_dev.sh --down          # tear it down
+```
+
+In container mode it rewrites the target's devcontainer into a scratch
+`.devcontainer/.rbs-dev/` config that (a) resolves the `rbs` feature from this repo's local
+`features/src/rbs` instead of the registry, and (b) bind-mounts this working tree to `/opt/rbs-src`
+and installs it **editable**. Point (b) matters: the feature normally installs rbs from *git*, so
+without the override the container would run committed `main`, not your edits. Because the install
+is editable, saving a `.py` file changes behavior in the running container with no rebuild.
+
+The scratch dir is added to the target's `.git/info/exclude`, so it never dirties `git status` or a
+tracked `.gitignore`.
+
+### The hub's own pipeline
+
 This repo runs its own pipeline against itself:
 
 ```bash
