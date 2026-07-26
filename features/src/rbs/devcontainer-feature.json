@@ -1,0 +1,25 @@
+{
+  "id": "rbs",
+  "version": "0.1.0",
+  "name": "Redux Build System (rbs)",
+  "description": "Installs the rbs pipeline CLI so a repo's gates (lint, test, build, integration-test) run inside its dev container.",
+  "documentationURL": "https://github.com/ReduxISU/Redux_Build_System",
+  "options": {
+    "version": {
+      "type": "string",
+      "proposals": ["latest", "main"],
+      "default": "latest",
+      "description": "Git ref of Redux_Build_System to install; 'latest' tracks the default branch."
+    },
+    "repo": {
+      "type": "string",
+      "default": "https://github.com/ReduxISU/Redux_Build_System",
+      "description": "Source repository for the CLI."
+    }
+  },
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils",
+    "ghcr.io/devcontainers/features/python",
+    "ghcr.io/devcontainers/features/docker-outside-of-docker"
+  ]
+}

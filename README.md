@@ -190,7 +190,47 @@ Keys for unimplemented operations (`[integration]`, `[push]`, matrix `python-ver
 
 ---
 
-## Testing it in a devcontainer
+## Getting `rbs` into a repo's devcontainer
+
+`rbs` ships as a **devcontainer Feature**, so a consumer repo does not vendor any install logic — it
+lists the feature and gets the CLI on `PATH`:
+
+```jsonc
+// quantumsolver/.devcontainer/devcontainer.json
+{
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/reduxisu/features/rbs:1": {},
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": { "moby": false }
+  }
+}
+```
+
+Open that container and you have quantumsolver's toolchain **plus** `rbs lint`, `rbs unit-test`,
+`rbs build`. Same feature line works on the .NET base image for `Redux` and the Node one for
+`Redux_GUI` — the feature installs a managed Python for itself, so the host image needs no Python.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `version` | `latest` | Git ref of this repo to install; pin it (e.g. `"version": "v1"`) for reproducibility |
+| `repo` | this repo's URL | Source repository, for forks |
+
+**Pair it with `docker-outside-of-docker`.** The feature deliberately does *not* install Docker;
+`rbs build` and `rbs integration-test` need a Docker socket, so the consumer adds that feature
+alongside it. The `rbs` feature installs *after* `common-utils`, `python`, and the docker feature.
+
+Source lives in [`features/src/rbs/`](features/src/rbs) and is published to GHCR by
+`.github/workflows/publish-features.yml` on any change to it. Until it is published, reference it by
+local path or test it with:
+
+```bash
+devcontainer features test --project-folder features --features rbs \
+  --base-image mcr.microsoft.com/devcontainers/base:ubuntu
+```
+
+---
+
+## Developing `rbs` itself in a devcontainer
 
 This repo ships a devcontainer so `rbs` can be exercised in the same kind of sandbox the consumer
 repos use. It includes **docker-outside-of-docker**, so `rbs build` inside the container drives the

@@ -8,7 +8,7 @@ from redux_build import __version__
 from redux_build import config as config_mod
 from redux_build import report as report_mod
 from redux_build.context import RunContext
-from redux_build.registry import get_engine
+from redux_build.registry import UnknownEngine, get_engine
 
 app = typer.Typer(
     help="Redux Build System — CI/CD engine CLI (rbs).",
@@ -47,7 +47,12 @@ def _resolve_engine(ctx: RunContext):
 
 def _run(operation: str, variant: str) -> None:
     ctx = RunContext.detect(variant=variant)
-    fragment = _resolve_engine(ctx).run_operation(operation, ctx)
+    try:
+        engine = _resolve_engine(ctx)
+    except (config_mod.ConfigError, UnknownEngine) as exc:
+        typer.secho(f"rbs: {exc}", fg="red", err=True)
+        raise typer.Exit(code=2) from None
+    fragment = engine.run_operation(operation, ctx)
     report_mod.emit(ctx, fragment)
     if not fragment.ok:
         raise typer.Exit(code=1)
