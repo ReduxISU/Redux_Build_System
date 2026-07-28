@@ -8,6 +8,7 @@ from redux_build import __version__
 from redux_build import config as config_mod
 from redux_build import report as report_mod
 from redux_build.context import RunContext
+from redux_build.models import Fragment, Status
 from redux_build.registry import UnknownEngine, get_engine
 
 app = typer.Typer(
@@ -52,7 +53,20 @@ def _run(operation: str, variant: str) -> None:
     except (config_mod.ConfigError, UnknownEngine) as exc:
         typer.secho(f"rbs: {exc}", fg="red", err=True)
         raise typer.Exit(code=2) from None
-    fragment = engine.run_operation(operation, ctx)
+    blocker = report_mod.find_blocker(
+        ctx.report_dir, engine.requires.get(operation, [])
+    )
+    fragment = (
+        Fragment(
+            engine=engine.name,
+            operation=operation,
+            status=Status.blocked,
+            summary=f"not run — `{blocker}` failed",
+            variant=variant,
+        )
+        if blocker
+        else engine.run_operation(operation, ctx)
+    )
     report_mod.emit(ctx, fragment)
     if not fragment.ok:
         raise typer.Exit(code=1)
@@ -115,6 +129,7 @@ def report(
     body = report_mod.render_markdown(fragments, ctx)
     Path("report.md").write_text(body)
     typer.echo(body)
+    report_mod.write_step_summary(ctx, body)
     if post:
         typer.echo(report_mod.post_comment(body, ctx))
     if not soft and report_mod.has_failure(fragments):

@@ -11,7 +11,11 @@
       "type": "string",
       "enum": ["audit", "format-check", "lint", "unit-test", "build", "integration-test", "push"]
     },
-    "status": { "type": "string", "enum": ["success", "failure", "skipped", "warning"] },
+    "status": {
+      "type": "string",
+      "enum": ["success", "failure", "skipped", "warning", "blocked"],
+      "description": "blocked = a required upstream operation failed, so this never ran."
+    },
     "summary": { "type": "string", "description": "One-line human summary." },
     "variant": { "type": "string", "description": "Matrix variant label, e.g. py3.12." },
     "metrics": { "type": "object", "description": "Optional machine-readable metrics." },

@@ -9,6 +9,9 @@ class Status(StrEnum):
     failure = "failure"
     skipped = "skipped"
     warning = "warning"
+    # An upstream operation this one depends on failed, so it never ran. Distinct from
+    # `skipped`, which means "legitimately not applicable here".
+    blocked = "blocked"
 
 
 @dataclass

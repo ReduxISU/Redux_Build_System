@@ -93,7 +93,7 @@ Every operation returns a **Fragment**, the unit the reporter aggregates:
 }
 ```
 
-`status` is one of `success` / `failure` / `skipped` / `warning`. Schema:
+`status` is one of `success` / `failure` / `skipped` / `warning` / `blocked`. Schema:
 [`schemas/report-fragment.schema.json`](schemas/report-fragment.schema.json). Operations are pure —
 they return a Fragment and the CLI performs the side effects — which is why they are unit-testable.
 
@@ -116,7 +116,44 @@ rbs <operation>
 rbs report → load every fragment → render markdown → (--post) upsert one sticky PR comment
 ```
 
-Exit code is non-zero when the operation fails, so each step can gate the next.
+Exit code is non-zero when the operation fails.
+
+### Failure policy — report everything, block only what genuinely can't run
+
+A PR gate's job is to tell you *everything* that is wrong in one pass, not just the first thing.
+
+**Quality gates** (`audit`, `format-check`, `lint`, `unit-test`) have **no prerequisites**. A lint
+failure never stops the audit from running. Every one of them reports, every run.
+
+**The artifact chain** is a real data dependency, so it is enforced: you cannot integration-test an
+image that failed to build, or push one that failed its tests. Those operations declare
+prerequisites (`Engine.requires`), and when one is unmet the operation reports **`blocked`** —
+"a required upstream operation failed, so this never ran" — instead of running and failing for the
+wrong reason, or reporting a misleading `skipped`.
+
+```
+audit ─┐
+lint  ─┼─ all always run, independently
+…     ─┘
+build ──✅/❌──▶ integration-test ──✅/❌──▶ push       ❌ upstream ⇒ ⛔ blocked downstream
+```
+
+Crucially **that policy lives here, not in workflow YAML.** `rbs integration-test` reads the
+fragments already on disk and short-circuits itself, so it behaves identically on your laptop and in
+CI. Workflow steps therefore carry a uniform, policy-free `continue-on-error: true`, and
+**`rbs report` is the single gate** that fails the build:
+
+```yaml
+- run: rbs audit
+  continue-on-error: true      # identical on every operation step — no policy in YAML
+- run: rbs lint
+  continue-on-error: true
+…
+- run: rbs report --post       # the only step that can fail the job
+```
+
+For branch protection / rulesets this means you require **one** status check — the report job —
+rather than one per operation. It cannot go stale as operations are added.
 
 **The artifact hand-off — the point of the whole design:**
 
@@ -333,23 +370,27 @@ jobs:
   quality:                     # matrix: 3.12 / 3.13
     steps:
       - uses: ./.github/actions/setup-rbs
-      - run: rbs audit
-      - run: rbs format-check
-      - run: rbs lint
-      - run: rbs unit-test --variant py${{ matrix.python }}
+      - { run: rbs audit,        continue-on-error: true }
+      - { run: rbs format-check, continue-on-error: true }
+      - { run: rbs lint,         continue-on-error: true }
+      - { run: "rbs unit-test --variant py${{ matrix.python }}", continue-on-error: true }
       - uses: actions/upload-artifact@v4      # report-quality-<ver>
 
   build-test:                  # needs: quality
-    steps:
-      - run: rbs build                        # local image, not pushed
-      - run: rbs integration-test             # against that image
-      - run: rbs push                         # only if the above passed
+    steps:                     # rbs itself blocks the chain — see "Failure policy"
+      - { run: rbs build,            continue-on-error: true }   # local image, not pushed
+      - { run: rbs integration-test, continue-on-error: true }   # ⛔ if build failed
+      - { run: rbs push,             continue-on-error: true }   # ⛔ unless both passed
+      - uses: actions/upload-artifact@v4
 
   report:                      # needs: [quality, build-test], if: always()
     steps:
       - uses: actions/download-artifact@v4    # pattern: report-*, merge-multiple
-      - run: rbs report --post                # one sticky PR comment
+      - run: rbs report --post                # sticky PR comment + job summary; THE gate
 ```
+
+`if: always()` on the report job is required — without it a failed upstream job would skip the
+report and you would lose the very summary explaining what broke.
 
 Why permissions are declared in the **caller**: a reusable workflow can only narrow `GITHUB_TOKEN`
 scope, never widen it. Fork PRs get a read-only token and no secrets — push and comment are skipped
@@ -358,25 +399,40 @@ by design, and the report still renders in the job summary.
 ### The report (Goal B)
 
 Each operation drops a JSON fragment; each job uploads its fragments as an artifact; a final job
-merges them and upserts **one** comment, keyed by an HTML marker so re-runs edit it instead of
-spamming the thread:
+merges them and renders the table **twice** — into `$GITHUB_STEP_SUMMARY` (the bottom of the Actions
+run) and as **one** sticky PR comment, keyed by an HTML marker so re-runs edit it instead of spamming
+the thread.
+
+Rows appear in the engine's pipeline order, not alphabetically, so the table reads in the order the
+work actually happened:
 
 ```markdown
 ## Redux Build System — CI Report
 `uv` · commit `a1b2c3d`
 
-| Operation | Status | Summary |
-|---|:--:|---|
-| audit | ✅ | no known vulnerabilities |
-| format-check | ✅ | all files formatted |
-| lint | ✅ | 0 issues |
-| unit-test · py3.12 | ✅ | 142 passed · coverage 91% |
-| unit-test · py3.13 | ✅ | 142 passed · coverage 91% |
-| build | ✅ | built `local/quantumsolver:ci` · 610MB |
-| integration-test | ✅ | /health 200 · 6/6 checks |
-| push | ⏭️ | only on push to `main` |
+| Operation | Status | Summary | Time |
+|---|:--:|---|--:|
+| audit | ✅ | no known vulnerabilities | 3.1s |
+| format-check | ✅ | all files formatted | 0.9s |
+| lint | ✅ | 0 issues | 2.4s |
+| unit-test · py3.12 | ✅ | 142 passed · coverage 91% | 37.2s |
+| unit-test · py3.13 | ✅ | 142 passed · coverage 91% | 36.8s |
+| build | ✅ | built `local/quantumsolver:ci` · 610MB | 48.0s |
+| integration-test | ✅ | /health 200 · 6/6 checks | 12.7s |
+| push | ⏭️ | only on push to `main` | — |
 
 **Overall: ✅ 7 passed · 0 failed · 1 skipped**
+```
+
+A run where the artifact chain breaks reports the failure once and marks the rest `blocked`, so it is
+obvious what was never attempted versus what was legitimately not applicable:
+
+```markdown
+| build | ❌ | docker build failed | 0.9s |
+| integration-test | ⛔ | not run — `build` failed | — |
+| push | ⛔ | not run — `build` failed | — |
+
+**Overall: ❌ 0 passed · 1 failed · 0 skipped · 2 blocked**
 ```
 
 ---

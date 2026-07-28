@@ -17,6 +17,15 @@ class Engine:
     name: str = ""
     order: list[str] = []
 
+    # Operations that cannot run unless their prerequisites succeeded — you cannot test an
+    # artifact that failed to build, or push one that failed its tests. Quality gates
+    # (audit/format-check/lint/unit-test) deliberately have no prerequisites: they always run
+    # so one CI pass reports every problem at once.
+    requires: dict[str, list[str]] = {
+        "integration-test": ["build"],
+        "push": ["build", "integration-test"],
+    }
+
     def __init__(self, config: dict):
         self.config = config
 

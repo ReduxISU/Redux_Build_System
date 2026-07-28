@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 
 import requests
 
 from redux_build.context import RunContext
 from redux_build.models import Fragment, Status
+from redux_build.registry import ENGINES
 
 MARKER = "<!-- rbs-report -->"
 
@@ -15,6 +17,7 @@ _ICON = {
     Status.failure: "❌",
     Status.skipped: "⏭️",
     Status.warning: "⚠️",
+    Status.blocked: "⛔",
 }
 
 
@@ -48,6 +51,19 @@ def load_fragments(report_dir: Path) -> list[Fragment]:
     return fragments
 
 
+def find_blocker(report_dir: Path, required: list[str]) -> str | None:
+    """First prerequisite that failed or was itself blocked, if any.
+
+    Read from the fragments already on disk, so `rbs integration-test` short-circuits the same
+    way locally as in CI — the dependency policy lives here, never in workflow YAML.
+    """
+    if not required:
+        return None
+    by_operation = {f.operation: f.status for f in load_fragments(report_dir)}
+    blocking = (Status.failure, Status.blocked)
+    return next((name for name in required if by_operation.get(name) in blocking), None)
+
+
 def summary_line(fragment: Fragment) -> str:
     label = fragment.operation
     if fragment.variant:
@@ -69,30 +85,58 @@ def emit(ctx: RunContext, fragment: Fragment) -> None:
 
 
 def render_markdown(fragments: list[Fragment], ctx: RunContext | None = None) -> str:
-    passed = failed = skipped = 0
+    tally = Counter(f.status for f in fragments)
     rows = []
-    for fragment in sorted(fragments, key=lambda f: (f.operation, f.variant)):
+    for fragment in sorted(fragments, key=_sort_key(_pipeline_order(fragments))):
         label = fragment.operation + (
             f" · {fragment.variant}" if fragment.variant else ""
         )
-        rows.append(f"| {label} | {_ICON[fragment.status]} | {fragment.summary} |")
-        if fragment.status == Status.failure:
-            failed += 1
-        elif fragment.status == Status.skipped:
-            skipped += 1
-        else:
-            passed += 1
-    overall = "❌" if failed else "✅"
+        rows.append(
+            f"| {label} | {_ICON[fragment.status]} | {fragment.summary} "
+            f"| {_duration(fragment)} |"
+        )
+    overall = "❌" if tally[Status.failure] else "✅"
     head = [MARKER, "## Redux Build System — CI Report"]
     subtitle = _subtitle(fragments, ctx)
     if subtitle:
         head.append(subtitle)
-    head += ["", "| Operation | Status | Summary |", "|---|:--:|---|"]
-    tail = [
-        "",
-        f"**Overall: {overall} {passed} passed · {failed} failed · {skipped} skipped**",
-    ]
+    head += ["", "| Operation | Status | Summary | Time |", "|---|:--:|---|--:|"]
+    tail = ["", f"**Overall: {overall} {_tally_line(tally)}**"]
     return "\n".join([*head, *rows, *tail])
+
+
+def _pipeline_order(fragments: list[Fragment]) -> list[str]:
+    """The producing toolchain's operation order, so rows read in execution order."""
+    engines = {f.engine for f in fragments if f.engine}
+    if len(engines) != 1:
+        return []
+    engine_cls = ENGINES.get(engines.pop())
+    return engine_cls.order if engine_cls else []
+
+
+def _sort_key(order: list[str]):
+    def key(fragment: Fragment) -> tuple:
+        position = (
+            order.index(fragment.operation)
+            if fragment.operation in order
+            else len(order)
+        )
+        return (position, fragment.operation, fragment.variant)
+
+    return key
+
+
+def _duration(fragment: Fragment) -> str:
+    return f"{fragment.duration_s:.1f}s" if fragment.duration_s else "—"
+
+
+def _tally_line(tally: Counter) -> str:
+    passed = tally[Status.success] + tally[Status.warning]
+    parts = [f"{passed} passed", f"{tally[Status.failure]} failed"]
+    parts += [f"{tally[Status.skipped]} skipped"]
+    if tally[Status.blocked]:
+        parts.append(f"{tally[Status.blocked]} blocked")
+    return " · ".join(parts)
 
 
 def _subtitle(fragments: list[Fragment], ctx: RunContext | None) -> str:
@@ -104,6 +148,14 @@ def _subtitle(fragments: list[Fragment], ctx: RunContext | None) -> str:
     if sha:
         parts.append(f"commit `{sha[:7]}`")
     return " · ".join(parts)
+
+
+def write_step_summary(ctx: RunContext, body: str) -> None:
+    """Render the aggregated table at the bottom of the Actions run, not just in the PR comment."""
+    if not ctx.step_summary_path:
+        return
+    with ctx.step_summary_path.open("a") as handle:
+        handle.write(body + "\n")
 
 
 def has_failure(fragments: list[Fragment]) -> bool:
