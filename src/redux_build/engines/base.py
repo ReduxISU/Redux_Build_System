@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from redux_build import docker
 from redux_build.context import RunContext
-from redux_build.models import Fragment, Status
+from redux_build.models import Finding, Fragment, Status
 from redux_build.runner import CmdResult, run
 
 
@@ -75,14 +75,27 @@ class Engine:
     def run_operation(self, operation: str, ctx: RunContext) -> Fragment:
         return getattr(self, operation.replace("-", "_"))(ctx)
 
-    def _exec(self, cmd: list[str], ctx: RunContext) -> CmdResult:
-        result = run(cmd, ctx.cwd)
-        if result.out.strip():
+    def _exec(
+        self,
+        cmd: list[str],
+        ctx: RunContext,
+        echo: bool = True,
+        merge_stderr: bool = True,
+    ) -> CmdResult:
+        """Run a tool. `echo=False` for JSON invocations — the reporter prints the parsed
+        findings instead, so logs stay readable rather than dumping a raw document."""
+        result = run(cmd, ctx.cwd, merge_stderr=merge_stderr)
+        if echo and result.out.strip():
             print(result.out.rstrip("\n"))
         return result
 
     def _fragment(
-        self, operation: str, ctx: RunContext, result: CmdResult, summary: str
+        self,
+        operation: str,
+        ctx: RunContext,
+        result: CmdResult,
+        summary: str,
+        findings: list[Finding] | None = None,
     ) -> Fragment:
         status = Status.success if result.ok else Status.failure
         return Fragment(
@@ -92,4 +105,5 @@ class Engine:
             summary=summary,
             variant=ctx.variant,
             duration_s=result.duration_s,
+            findings=findings or [],
         )

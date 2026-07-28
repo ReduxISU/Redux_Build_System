@@ -7,10 +7,15 @@ from pathlib import Path
 import requests
 
 from redux_build.context import RunContext
-from redux_build.models import Fragment, Status
+from redux_build.models import Finding, Fragment, Status
 from redux_build.registry import ENGINES
 
 MARKER = "<!-- rbs-report -->"
+
+# Findings shown per operation before truncating. A PR comment is capped at 65536 chars, and an
+# unreadable wall of text helps nobody — but the count of what was dropped is always stated.
+MAX_FINDINGS = 20
+MAX_MESSAGE = 140
 
 _ICON = {
     Status.success: "✅",
@@ -46,6 +51,15 @@ def load_fragments(report_dir: Path) -> list[Fragment]:
                 variant=data.get("variant", ""),
                 metrics=data.get("metrics", {}),
                 duration_s=data.get("duration_s", 0.0),
+                findings=[
+                    Finding(
+                        message=item.get("message", ""),
+                        location=item.get("location", ""),
+                        rule=item.get("rule", ""),
+                        severity=item.get("severity", ""),
+                    )
+                    for item in data.get("findings", [])
+                ],
             )
         )
     return fragments
@@ -71,11 +85,30 @@ def summary_line(fragment: Fragment) -> str:
     return f"{_ICON[fragment.status]} {label} — {fragment.summary}"
 
 
+def console_findings(fragment: Fragment, limit: int = MAX_FINDINGS) -> list[str]:
+    """Indented finding lines for the terminal / CI log — one line each, never a wall of text."""
+    lines = [
+        "    "
+        + " ".join(
+            part
+            for part in (f.severity, f.location, f.rule, _one_line(f.message))
+            if part
+        )
+        for f in fragment.findings[:limit]
+    ]
+    remaining = len(fragment.findings) - limit
+    if remaining > 0:
+        lines.append(f"    … and {remaining} more")
+    return lines
+
+
 def emit(ctx: RunContext, fragment: Fragment) -> None:
     """Persist the fragment; in CI also append the step summary and step outputs."""
     write_fragment(ctx, fragment)
     line = summary_line(fragment)
     print(line)
+    for finding_line in console_findings(fragment):
+        print(finding_line)
     if ctx.step_summary_path:
         with ctx.step_summary_path.open("a") as handle:
             handle.write(line + "\n")
@@ -102,7 +135,65 @@ def render_markdown(fragments: list[Fragment], ctx: RunContext | None = None) ->
         head.append(subtitle)
     head += ["", "| Operation | Status | Summary | Time |", "|---|:--:|---|--:|"]
     tail = ["", f"**Overall: {overall} {_tally_line(tally)}**"]
-    return "\n".join([*head, *rows, *tail])
+    details = [
+        block
+        for fragment in sorted(fragments, key=_sort_key(_pipeline_order(fragments)))
+        if (block := _details_block(fragment))
+    ]
+    return "\n".join([*head, *rows, *tail, *details])
+
+
+def _details_block(fragment: Fragment) -> str:
+    """A collapsed list of what actually failed — the *which* behind the summary count."""
+    if not fragment.findings:
+        return ""
+    label = fragment.operation + (f" · {fragment.variant}" if fragment.variant else "")
+    rows = [
+        "| "
+        + " | ".join(
+            _cell(value)
+            for value in (
+                finding.severity,
+                finding.location,
+                finding.rule,
+                finding.message,
+            )
+        )
+        + " |"
+        for finding in fragment.findings[:MAX_FINDINGS]
+    ]
+    remaining = len(fragment.findings) - MAX_FINDINGS
+    if remaining > 0:
+        rows.append(f"| | | | _… and {remaining} more_ |")
+    return "\n".join(
+        [
+            "",
+            f"<details><summary>{_ICON[fragment.status]} {label} — "
+            f"{fragment.summary}</summary>",
+            "",
+            "| Severity | Location | Rule | Message |",
+            "|---|---|---|---|",
+            *rows,
+            "",
+            "</details>",
+        ]
+    )
+
+
+def _one_line(value: str, limit: int = MAX_MESSAGE) -> str:
+    """First line only, whitespace-collapsed and length-capped.
+
+    Some tools return essays: eslint's `react-hooks` rules embed several paragraphs plus a code
+    frame in `message`. The full text stays in the fragment JSON; only the display is trimmed.
+    """
+    lines = [line.strip() for line in str(value).splitlines() if line.strip()]
+    text = " ".join(lines[0].split()) if lines else ""
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _cell(value: str) -> str:
+    """Markdown table cells cannot contain a raw pipe or newline."""
+    return _one_line(value).replace("|", "\\|")
 
 
 def _pipeline_order(fragments: list[Fragment]) -> list[str]:

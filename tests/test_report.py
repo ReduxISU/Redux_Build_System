@@ -1,6 +1,25 @@
 from redux_build import report
 from redux_build.context import RunContext
-from redux_build.models import Fragment, Status
+from redux_build.models import Finding, Fragment, Status
+
+
+def _with_findings(count, **overrides):
+    findings = [
+        Finding(
+            message=overrides.get("message", f"problem {i}"),
+            location=f"src/file{i}.js:{i}",
+            rule="no-undef",
+            severity="error",
+        )
+        for i in range(count)
+    ]
+    return Fragment(
+        engine="npm",
+        operation="lint",
+        status=Status.failure,
+        summary=f"{count} errors",
+        findings=findings,
+    )
 
 
 def _ctx(tmp_path, **env):
@@ -139,3 +158,62 @@ def test_report_writes_rendered_table_to_step_summary(tmp_path):
 def test_write_step_summary_noop_outside_ci(tmp_path):
     ctx = RunContext(cwd=tmp_path, is_github=False, env={})
     report.write_step_summary(ctx, "body")  # must not raise
+
+
+def test_findings_render_in_a_collapsed_block():
+    md = report.render_markdown([_with_findings(2)])
+    assert "<details><summary>" in md
+    assert "| Severity | Location | Rule | Message |" in md
+    assert "src/file0.js:0" in md
+    assert "</details>" in md
+
+
+def test_no_details_block_without_findings():
+    frags = [Fragment(engine="npm", operation="lint", status=Status.success)]
+    assert "<details>" not in report.render_markdown(frags)
+
+
+def test_findings_truncated_with_the_remainder_stated():
+    # Never silently cap: the reader must know how much was withheld.
+    md = report.render_markdown([_with_findings(report.MAX_FINDINGS + 7)])
+    assert "_… and 7 more_" in md
+    assert md.count("src/file") == report.MAX_FINDINGS
+
+
+def test_pipes_escaped_in_cells():
+    md = report.render_markdown([_with_findings(1, message="a | b")])
+    assert "a \\| b" in md
+
+
+def test_only_the_first_line_of_a_multiline_message_is_shown():
+    # eslint's react-hooks rules embed paragraphs + a code frame in `message`.
+    essay = (
+        "Calling setState in an effect is bad\n\nLong explanation\n  120 | code frame"
+    )
+    frag = _with_findings(1, message=essay)
+    md = report.render_markdown([frag])
+    assert "Calling setState in an effect is bad" in md
+    assert "code frame" not in md
+    assert report.console_findings(frag)[0].count("\n") == 0
+
+
+def test_long_messages_truncated():
+    frag = _with_findings(1, message="x" * 400)
+    md = report.render_markdown([frag])
+    assert "…" in md
+    assert "x" * 400 not in md
+
+
+def test_findings_round_trip_through_the_fragment_file(tmp_path):
+    ctx = _ctx(tmp_path)
+    report.write_fragment(ctx, _with_findings(3))
+    loaded = report.load_fragments(ctx.report_dir)[0]
+    assert len(loaded.findings) == 3
+    assert loaded.findings[0].rule == "no-undef"
+    assert loaded.findings[0].location == "src/file0.js:0"
+
+
+def test_console_findings_are_capped_and_state_remainder():
+    lines = report.console_findings(_with_findings(25), limit=5)
+    assert len(lines) == 6
+    assert lines[-1].strip() == "… and 20 more"

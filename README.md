@@ -83,15 +83,30 @@ Every operation returns a **Fragment**, the unit the reporter aggregates:
 
 ```json
 {
-  "engine": "uv",
-  "operation": "unit-test",
-  "status": "success",
-  "summary": "142 passed · coverage 91%",
-  "variant": "py3.12",
+  "engine": "npm",
+  "operation": "lint",
+  "status": "failure",
+  "summary": "26 errors, 43 warnings",
+  "variant": "",
   "metrics": {},
-  "duration_s": 37.2
+  "duration_s": 4.4,
+  "findings": [
+    {
+      "severity": "error",
+      "location": "components/hooks/ProblemProvider/Problem.js:51",
+      "rule": "no-undef",
+      "message": "'requestInfo' is not defined."
+    }
+  ]
 }
 ```
+
+`findings` is what makes the report *actionable* rather than merely informative — a reviewer sees
+which file and which rule, not just a count. The shape is deliberately tool-agnostic, so `location`
+is `file:line` for a linter, `pkg@range` for an audit, and a test id for a test run. Engines get it
+by asking their tools for JSON (`eslint -f json`, `biome --reporter=json`, `npm audit --json`) and
+translating; a document that fails to parse yields no findings rather than crashing the run, and the
+exit code still gates.
 
 `status` is one of `success` / `failure` / `skipped` / `warning` / `blocked`. Schema:
 [`schemas/report-fragment.schema.json`](schemas/report-fragment.schema.json). Operations are pure —
@@ -435,6 +450,25 @@ obvious what was never attempted versus what was legitimately not applicable:
 **Overall: ❌ 0 passed · 1 failed · 0 skipped · 2 blocked**
 ```
 
+Below the table, any operation with findings gets a collapsed block naming what to actually fix:
+
+```markdown
+<details><summary>❌ lint — 26 errors, 43 warnings</summary>
+
+| Severity | Location | Rule | Message |
+|---|---|---|---|
+| error | components/hooks/ProblemProvider/Problem.js:51 | no-undef | 'requestInfo' is not defined. |
+| error | components/pageblocks/VerifyRowReact.js:43 | react-hooks/set-state-in-effect | Calling setState synchronously within an effect… |
+| | | | _… and 49 more_ |
+
+</details>
+```
+
+At most `MAX_FINDINGS` (20) are listed per operation, most severe first, and the remainder is always
+stated — a truncated report must never read as a complete one. Messages are trimmed to their first
+line (`react-hooks` rules embed several paragraphs and a code frame); the full text stays in the
+fragment JSON.
+
 ---
 
 ## Status
@@ -444,7 +478,7 @@ obvious what was never attempted versus what was legitimately not applicable:
 | `audit`, `format-check`, `lint`, `unit-test` (uv engine) | ✅ implemented |
 | `audit`, `format-check`, `lint`, `unit-test` (npm engine) | ✅ implemented |
 | `build` — local image via `docker buildx --load` | ✅ implemented |
-| `report` — fragments, markdown, sticky-comment poster | ✅ implemented |
+| `report` — fragments, markdown, findings, sticky comment + job summary | ✅ implemented |
 | `integration-test` | ⬜ next |
 | `push` | ⬜ planned |
 | `rbs ci` — run the engine's full ordered pipeline | ⬜ planned |

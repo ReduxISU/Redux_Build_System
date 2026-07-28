@@ -15,6 +15,19 @@ class Status(StrEnum):
 
 
 @dataclass
+class Finding:
+    """One actionable item behind a Fragment's summary — the *which*, not just the count.
+
+    Deliberately tool-agnostic: `location` is a file:line for a linter, `pkg@range` for an audit,
+    a test id for a test run."""
+
+    message: str
+    location: str = ""
+    rule: str = ""
+    severity: str = ""
+
+
+@dataclass
 class Fragment:
     engine: str
     operation: str
@@ -23,6 +36,7 @@ class Fragment:
     variant: str = ""
     metrics: dict = field(default_factory=dict)
     duration_s: float = 0.0
+    findings: list[Finding] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:

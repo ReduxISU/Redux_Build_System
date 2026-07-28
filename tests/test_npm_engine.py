@@ -1,10 +1,80 @@
 import json
+from pathlib import Path
 
 from redux_build.context import RunContext
 from redux_build.engines import base as basemod
 from redux_build.engines.npm import NpmEngine
 from redux_build.models import Status
 from redux_build.runner import CmdResult
+
+# Fixtures below mirror the real documents these tools emit — captured from Redux_GUI.
+
+ESLINT_JSON = json.dumps(
+    [
+        {
+            "filePath": "/repo/components/Card.js",
+            "messages": [
+                {
+                    "ruleId": "@next/next/no-img-element",
+                    "severity": 1,
+                    "message": "Using `<img>` could result in slower LCP.",
+                    "line": 14,
+                },
+                {
+                    "ruleId": "no-undef",
+                    "severity": 2,
+                    "message": "'foo' is not defined.",
+                    "line": 3,
+                },
+            ],
+        }
+    ]
+)
+
+BIOME_JSON = json.dumps(
+    {
+        "summary": {"errors": 3, "warnings": 0, "infos": 1},
+        "diagnostics": [
+            {
+                "severity": "error",
+                "message": "Formatter would have printed the following content:",
+                "category": "format",
+                "location": {"path": "Tools/Constants.js"},
+            },
+            {
+                "severity": "error",
+                "message": "The imports are not sorted.",
+                "category": "assist/source/organizeImports",
+                "location": {"path": "pages/index.js"},
+            },
+        ],
+    }
+)
+
+AUDIT_JSON = json.dumps(
+    {
+        "vulnerabilities": {
+            "brace-expansion": {
+                "name": "brace-expansion",
+                "severity": "high",
+                "range": "<=5.0.7",
+                "via": [
+                    {
+                        "title": "brace-expansion: DoS via exponential-time expansion",
+                        "url": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp",
+                        "severity": "high",
+                    }
+                ],
+            },
+            "postcss": {
+                "name": "postcss",
+                "severity": "moderate",
+                "range": "<8.4.31",
+                "via": [],
+            },
+        }
+    }
+)
 
 
 def _ctx(tmp_path):
@@ -22,20 +92,39 @@ def _package_json(tmp_path, scripts):
     (tmp_path / "package.json").write_text(json.dumps({"scripts": scripts}))
 
 
-def test_audit_success(tmp_path, monkeypatch):
-    monkeypatch.setattr(basemod, "run", _fixed(0, "found 0 vulnerabilities"))
+# ── audit ────────────────────────────────────────────────────────────────────
+
+
+def test_audit_clean(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(0, json.dumps({"vulnerabilities": {}})))
     frag = NpmEngine({}).audit(_ctx(tmp_path))
     assert frag.status == Status.success
     assert frag.summary == "no known vulnerabilities"
+    assert frag.findings == []
 
 
-def test_audit_failure_parses_count(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        basemod, "run", _fixed(1, "\n4 high severity vulnerabilities\n")
-    )
+def test_audit_summarises_by_severity(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(1, AUDIT_JSON))
     frag = NpmEngine({}).audit(_ctx(tmp_path))
     assert frag.status == Status.failure
-    assert frag.summary == "4 high severity vulnerabilities"
+    assert frag.summary == "1 high · 1 moderate"
+
+
+def test_audit_findings_carry_advisory_details(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(1, AUDIT_JSON))
+    frag = NpmEngine({}).audit(_ctx(tmp_path))
+    top = frag.findings[0]
+    assert top.severity == "high"  # most severe first, so truncation keeps what matters
+    assert top.location == "brace-expansion@<=5.0.7"
+    assert "GHSA-3jxr-9vmj-r5cp" in top.rule
+    assert "DoS" in top.message
+
+
+def test_audit_without_advisory_still_reports_the_package(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(1, AUDIT_JSON))
+    frag = NpmEngine({}).audit(_ctx(tmp_path))
+    postcss = next(f for f in frag.findings if f.location.startswith("postcss"))
+    assert "postcss" in postcss.message
 
 
 def test_audit_omits_dev_dependencies(tmp_path, monkeypatch):
@@ -43,45 +132,91 @@ def test_audit_omits_dev_dependencies(tmp_path, monkeypatch):
 
     def _capture(cmd, *_args, **_kwargs):
         seen.append(cmd)
-        return CmdResult(rc=0, out="", duration_s=0.1)
+        return CmdResult(rc=0, out="{}", duration_s=0.1)
 
     monkeypatch.setattr(basemod, "run", _capture)
     NpmEngine({}).audit(_ctx(tmp_path))
-    assert seen == [["npm", "audit", "--omit=dev"]]
+    assert seen == [["npm", "audit", "--omit=dev", "--json"]]
 
 
-def test_format_check_failure_parses_count(tmp_path, monkeypatch):
-    out = "Checked 65 files in 13ms. No fixes applied.\nFound 84 errors.\n"
-    monkeypatch.setattr(basemod, "run", _fixed(1, out))
+# ── format-check ─────────────────────────────────────────────────────────────
+
+
+def test_format_check_clean(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(0, json.dumps({"diagnostics": []})))
+    frag = NpmEngine({}).format_check(_ctx(tmp_path))
+    assert frag.status == Status.success
+    assert frag.summary == "all files formatted"
+
+
+def test_format_check_splits_formatting_from_import_order(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(1, BIOME_JSON))
     frag = NpmEngine({}).format_check(_ctx(tmp_path))
     assert frag.status == Status.failure
-    assert frag.summary == "Found 84 errors"
+    assert "1 format" in frag.summary
+    assert "1 import order" in frag.summary
+    assert {f.location for f in frag.findings} == {
+        "Tools/Constants.js",
+        "pages/index.js",
+    }
 
 
-def test_lint_failure_parses_error_and_warning_counts(tmp_path, monkeypatch):
+def test_format_diagnostics_drop_the_boilerplate_message(tmp_path, monkeypatch):
+    # Biome repeats "Formatter would have printed…" plus the whole diff on every file.
+    monkeypatch.setattr(basemod, "run", _fixed(1, BIOME_JSON))
+    frag = NpmEngine({}).format_check(_ctx(tmp_path))
+    formatting = next(f for f in frag.findings if f.rule == "format")
+    assert formatting.message == "needs formatting"
+
+
+# ── lint ─────────────────────────────────────────────────────────────────────
+
+
+def test_lint_counts_come_from_parsed_findings(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(1, ESLINT_JSON))
+    frag = NpmEngine({}).lint(_ctx(tmp_path))
+    assert frag.status == Status.failure
+    assert frag.summary == "1 error, 1 warning"
+
+
+def test_lint_findings_are_error_first_with_location(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(1, ESLINT_JSON))
+    frag = NpmEngine({}).lint(RunContext(cwd=Path("/repo"), is_github=False, env={}))
+    assert frag.findings[0].severity == "error"
+    assert frag.findings[0].rule == "no-undef"
+    assert frag.findings[0].location == "components/Card.js:3"  # relative to cwd
+
+
+def test_lint_clean(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(0, "[]"))
+    frag = NpmEngine({}).lint(_ctx(tmp_path))
+    assert frag.status == Status.success
+    assert frag.summary == "0 problems"
+
+
+def test_lint_falls_back_to_text_when_json_is_unparseable(tmp_path, monkeypatch):
+    # A crashed tool must not crash rbs; the exit code still gates.
     monkeypatch.setattr(
-        basemod, "run", _fixed(1, "✖ 69 problems (26 errors, 43 warnings)\n")
+        basemod,
+        "run",
+        _fixed(1, "Oops, eslint exploded\n✖ 69 problems (26 errors, 43 warnings)"),
     )
     frag = NpmEngine({}).lint(_ctx(tmp_path))
     assert frag.status == Status.failure
     assert frag.summary == "26 errors, 43 warnings"
+    assert frag.findings == []
 
 
-def test_lint_reports_warnings_even_when_passing(tmp_path, monkeypatch):
-    # eslint exits 0 when only warnings remain; the summary must still show them.
-    monkeypatch.setattr(
-        basemod, "run", _fixed(0, "✖ 43 problems (0 errors, 43 warnings)\n")
-    )
-    frag = NpmEngine({}).lint(_ctx(tmp_path))
-    assert frag.status == Status.success
-    assert frag.summary == "0 errors, 43 warnings"
+def test_malformed_json_never_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(1, "not json at all"))
+    engine = NpmEngine({})
+    for operation in ("audit", "format-check", "lint"):
+        frag = engine.run_operation(operation, _ctx(tmp_path))
+        assert frag.status == Status.failure
+        assert frag.findings == []
 
 
-def test_lint_clean(tmp_path, monkeypatch):
-    monkeypatch.setattr(basemod, "run", _fixed(0, ""))
-    frag = NpmEngine({}).lint(_ctx(tmp_path))
-    assert frag.status == Status.success
-    assert frag.summary == "0 problems"
+# ── unit-test ────────────────────────────────────────────────────────────────
 
 
 def test_unit_test_skips_without_test_script(tmp_path):
