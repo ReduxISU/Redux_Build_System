@@ -16,13 +16,6 @@ def _fixed(rc, out):
     return _run
 
 
-def test_search_extracts_match_or_default():
-    assert (
-        uvmod._search(r"Found \d+ error\w*", "Found 3 errors.", "x") == "Found 3 errors"
-    )
-    assert uvmod._search(r"Found \d+ error\w*", "clean", "default") == "default"
-
-
 def test_lint_success(tmp_path, monkeypatch):
     monkeypatch.setattr(basemod, "run", _fixed(0, "All checks passed!"))
     frag = uvmod.UvEngine({}).lint(_ctx(tmp_path))

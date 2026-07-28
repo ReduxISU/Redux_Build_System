@@ -53,8 +53,19 @@ no `lint` module that branches on language.
 | Engine | Toolchain | Repos | Status |
 |---|---|---|---|
 | `uv` | Python + uv (ruff, black, pytest, pip-audit) | `quantumsolver`, this repo | implemented |
+| `npm` | Node (npm audit, biome, eslint) | `Redux_GUI` | implemented |
 | `dotnet` | .NET SDK (`dotnet test`, analyzers) | `Redux` | planned |
-| `npm` | Node (eslint, biome, next build) | `Redux_GUI` | planned |
+
+Two things the `npm` engine does deliberately:
+
+- **`audit` runs `npm audit --omit=dev`**, so it scans only what ships — the same surface the `uv`
+  engine gets from `uv export --no-dev`. Including devDependencies would gate a release on
+  vulnerabilities in the linter.
+- **`unit-test` reports `skipped` when `package.json` has no `test` script**, rather than passing
+  vacuously. It activates on its own the moment a suite is added.
+
+Tools run via `npx --no-install` — the node analogue of `uv run` — so a missing devDependency fails
+loudly instead of being silently fetched from the registry mid-gate.
 
 Adding a stack = one new class in `src/redux_build/engines/` subclassing `Engine`. Container
 operations (`build` / `integration-test` / `push`) are identical everywhere, so they live on the base
@@ -219,9 +230,13 @@ Open that container and you have quantumsolver's toolchain **plus** `rbs lint`, 
 `rbs build` and `rbs integration-test` need a Docker socket, so the consumer adds that feature
 alongside it. The `rbs` feature installs *after* `common-utils`, `python`, and the docker feature.
 
-Source lives in [`features/src/rbs/`](features/src/rbs) and is published to GHCR by
-`.github/workflows/publish-features.yml` on any change to it. Until it is published, reference it by
-local path or test it with:
+Source lives in [`features/src/rbs/`](features/src/rbs) and publishes to
+`ghcr.io/reduxisu/features/rbs` via `.github/workflows/publish-features.yml` on any change to it.
+The package is public, so no `docker login` is needed.
+
+**Bump `version` in `devcontainer-feature.json` whenever you change the feature** — republishing an
+existing version is a no-op. That version is the feature's own contract and is independent of the
+`rbs` CLI version. Test changes before publishing with:
 
 ```bash
 devcontainer features test --project-folder features --features rbs \
@@ -371,13 +386,14 @@ spamming the thread:
 | Capability | State |
 |---|---|
 | `audit`, `format-check`, `lint`, `unit-test` (uv engine) | ✅ implemented |
+| `audit`, `format-check`, `lint`, `unit-test` (npm engine) | ✅ implemented |
 | `build` — local image via `docker buildx --load` | ✅ implemented |
 | `report` — fragments, markdown, sticky-comment poster | ✅ implemented |
 | `integration-test` | ⬜ next |
 | `push` | ⬜ planned |
 | `rbs ci` — run the engine's full ordered pipeline | ⬜ planned |
 | Reusable workflows + `setup-rbs` action | ⬜ planned |
-| `dotnet` / `npm` engines | ⬜ planned |
+| `dotnet` engine | ⬜ planned |
 | `deploy` — pull-based compose deploy | ⬜ planned |
 
 Unimplemented operations report `skipped`, never a false pass.

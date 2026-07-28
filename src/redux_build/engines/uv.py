@@ -7,6 +7,7 @@ from pathlib import Path
 from redux_build.context import RunContext
 from redux_build.engines.base import Engine
 from redux_build.models import Fragment
+from redux_build.text import search
 
 
 class UvEngine(Engine):
@@ -52,7 +53,7 @@ class UvEngine(Engine):
         summary = (
             "no known vulnerabilities"
             if result.ok
-            else _search(
+            else search(
                 r"Found \d+ known vulnerabilit\w+", result.out, "vulnerabilities found"
             )
         )
@@ -63,7 +64,7 @@ class UvEngine(Engine):
         summary = (
             "all files formatted"
             if result.ok
-            else _search(
+            else search(
                 r"\d+ files? would be reformatted", result.out, "needs formatting"
             )
         )
@@ -74,7 +75,7 @@ class UvEngine(Engine):
         summary = (
             "0 issues"
             if result.ok
-            else _search(r"Found \d+ error\w*", result.out, "lint issues found")
+            else search(r"Found \d+ error\w*", result.out, "lint issues found")
         )
         return self._fragment("lint", ctx, result, summary)
 
@@ -88,14 +89,9 @@ class UvEngine(Engine):
         return self._fragment("unit-test", ctx, result, _test_summary(result.out))
 
 
-def _search(pattern: str, text: str, default: str) -> str:
-    match = re.search(pattern, text)
-    return match.group(0) if match else default
-
-
 def _test_summary(out: str) -> str:
-    passed = _search(r"\d+ passed", out, "")
-    failed = _search(r"\d+ failed", out, "")
+    passed = search(r"\d+ passed", out, "")
+    failed = search(r"\d+ failed", out, "")
     parts = [part for part in (failed, passed) if part]
     text = " · ".join(parts) if parts else "no tests reported"
     coverage = re.search(r"TOTAL.*?(\d+)%", out)
