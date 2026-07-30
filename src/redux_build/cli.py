@@ -46,13 +46,17 @@ def _resolve_engine(ctx: RunContext):
     return get_engine(config_mod.engine_name(config), config)
 
 
-def _run(operation: str, variant: str) -> None:
+def _context_and_engine(variant: str) -> tuple[RunContext, object]:
     ctx = RunContext.detect(variant=variant)
     try:
-        engine = _resolve_engine(ctx)
+        return ctx, _resolve_engine(ctx)
     except (config_mod.ConfigError, UnknownEngine) as exc:
         typer.secho(f"rbs: {exc}", fg="red", err=True)
         raise typer.Exit(code=2) from None
+
+
+def _execute(engine, ctx: RunContext, operation: str) -> Fragment:
+    """Run one operation unless a prerequisite failed, and persist the result."""
     blocker = report_mod.find_blocker(
         ctx.report_dir, engine.requires.get(operation, [])
     )
@@ -62,13 +66,30 @@ def _run(operation: str, variant: str) -> None:
             operation=operation,
             status=Status.blocked,
             summary=f"not run — `{blocker}` failed",
-            variant=variant,
+            variant=ctx.variant,
         )
         if blocker
         else engine.run_operation(operation, ctx)
     )
     report_mod.emit(ctx, fragment)
-    if not fragment.ok:
+    return fragment
+
+
+def _emit_report(ctx: RunContext, post: bool, soft: bool) -> None:
+    fragments = report_mod.load_fragments(ctx.report_dir)
+    body = report_mod.render_markdown(fragments, ctx)
+    Path("report.md").write_text(body)
+    typer.echo(body)
+    report_mod.write_step_summary(ctx, body)
+    if post:
+        typer.echo(report_mod.post_comment(body, ctx))
+    if not soft and report_mod.has_failure(fragments):
+        raise typer.Exit(code=1)
+
+
+def _run(operation: str, variant: str) -> None:
+    ctx, engine = _context_and_engine(variant)
+    if not _execute(engine, ctx, operation).ok:
         raise typer.Exit(code=1)
 
 
@@ -124,13 +145,27 @@ def report(
     ),
 ) -> None:
     """Aggregate operation fragments into one report."""
-    ctx = RunContext.detect()
-    fragments = report_mod.load_fragments(ctx.report_dir)
-    body = report_mod.render_markdown(fragments, ctx)
-    Path("report.md").write_text(body)
-    typer.echo(body)
-    report_mod.write_step_summary(ctx, body)
-    if post:
-        typer.echo(report_mod.post_comment(body, ctx))
-    if not soft and report_mod.has_failure(fragments):
-        raise typer.Exit(code=1)
+    _emit_report(RunContext.detect(), post=post, soft=soft)
+
+
+@app.command()
+def ci(
+    variant: str = VariantOption,
+    post: bool = typer.Option(
+        False, "--post", help="Upsert the report as a sticky PR comment."
+    ),
+    soft: bool = typer.Option(
+        False, "--soft", help="Exit 0 even if an operation failed."
+    ),
+) -> None:
+    """Run the engine's whole pipeline, then report — the one command a CI job needs.
+
+    Every quality gate runs even if an earlier one failed, so a single pass reports every
+    problem. The artifact chain still blocks: `integration-test` and `push` report `blocked`
+    when a prerequisite failed. Exits non-zero if anything failed.
+    """
+    ctx, engine = _context_and_engine(variant)
+    report_mod.clear_fragments(ctx.report_dir)
+    for operation in engine.order:
+        _execute(engine, ctx, operation)
+    _emit_report(ctx, post=post, soft=soft)

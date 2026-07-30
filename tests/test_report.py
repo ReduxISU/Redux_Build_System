@@ -81,6 +81,49 @@ def test_post_comment_without_context_is_noop(tmp_path):
     assert "skipped" in report.post_comment("body", ctx)
 
 
+def test_pr_number_from_explicit_env(tmp_path):
+    # devcontainers/ci cannot see GITHUB_EVENT_PATH, so the workflow passes the number in.
+    ctx = RunContext(cwd=tmp_path, is_github=True, env={"RBS_PR_NUMBER": "137"})
+    assert report.pull_request_number(ctx) == 137
+
+
+def test_pr_number_from_event_payload(tmp_path):
+    event = tmp_path / "event.json"
+    event.write_text('{"pull_request": {"number": 42}}')
+    ctx = RunContext(
+        cwd=tmp_path, is_github=True, env={"GITHUB_EVENT_PATH": str(event)}
+    )
+    assert report.pull_request_number(ctx) == 42
+
+
+def test_pr_number_none_on_push_event(tmp_path):
+    event = tmp_path / "event.json"
+    event.write_text('{"ref": "refs/heads/main"}')
+    ctx = RunContext(
+        cwd=tmp_path, is_github=True, env={"GITHUB_EVENT_PATH": str(event)}
+    )
+    assert report.pull_request_number(ctx) is None
+
+
+def test_pr_number_tolerates_unreadable_event_path(tmp_path):
+    ctx = RunContext(
+        cwd=tmp_path, is_github=True, env={"GITHUB_EVENT_PATH": "/nope/x.json"}
+    )
+    assert report.pull_request_number(ctx) is None
+
+
+def test_pr_number_ignores_non_numeric_env(tmp_path):
+    ctx = RunContext(cwd=tmp_path, is_github=True, env={"RBS_PR_NUMBER": ""})
+    assert report.pull_request_number(ctx) is None
+
+
+def test_step_summary_failure_does_not_raise(tmp_path):
+    ctx = RunContext(
+        cwd=tmp_path, is_github=True, env={"GITHUB_STEP_SUMMARY": "/nope/deep/sum.md"}
+    )
+    report.write_step_summary(ctx, "body")  # must not raise
+
+
 def test_rows_follow_pipeline_order_not_alphabetical():
     # build must not appear above the lint failure that should have gated it.
     frags = [

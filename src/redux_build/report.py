@@ -65,6 +65,12 @@ def load_fragments(report_dir: Path) -> list[Fragment]:
     return fragments
 
 
+def clear_fragments(report_dir: Path) -> None:
+    """Drop fragments from an earlier run so a full pipeline never reports stale results."""
+    for path in report_dir.glob("*.json"):
+        path.unlink()
+
+
 def find_blocker(report_dir: Path, required: list[str]) -> str | None:
     """First prerequisite that failed or was itself blocked, if any.
 
@@ -242,27 +248,49 @@ def _subtitle(fragments: list[Fragment], ctx: RunContext | None) -> str:
 
 
 def write_step_summary(ctx: RunContext, body: str) -> None:
-    """Render the aggregated table at the bottom of the Actions run, not just in the PR comment."""
+    """Render the aggregated table at the bottom of the Actions run, not just in the PR comment.
+
+    Best-effort: inside a devcontainer the forwarded runner path may not exist, and losing the
+    summary must never fail the pipeline — the workflow also appends `report.md` on the runner.
+    """
     if not ctx.step_summary_path:
         return
-    with ctx.step_summary_path.open("a") as handle:
-        handle.write(body + "\n")
+    try:
+        with ctx.step_summary_path.open("a") as handle:
+            handle.write(body + "\n")
+    except OSError as exc:
+        print(f"rbs: step summary unavailable ({exc})")
 
 
 def has_failure(fragments: list[Fragment]) -> bool:
     return any(f.status == Status.failure for f in fragments)
 
 
+def pull_request_number(ctx: RunContext) -> int | None:
+    """The PR to comment on.
+
+    `RBS_PR_NUMBER` takes precedence because `GITHUB_EVENT_PATH` points at a runner temp file
+    that is not mounted inside a devcontainer — so when rbs runs via `devcontainers/ci`, the
+    workflow passes the number in explicitly.
+    """
+    explicit = (ctx.env.get("RBS_PR_NUMBER") or "").strip()
+    if explicit.isdigit():
+        return int(explicit)
+    event_path = ctx.env.get("GITHUB_EVENT_PATH")
+    if not event_path or not Path(event_path).is_file():
+        return None
+    event = json.loads(Path(event_path).read_text())
+    return event.get("pull_request", {}).get("number")
+
+
 def post_comment(body: str, ctx: RunContext) -> str:
     token = ctx.env.get("GITHUB_TOKEN")
-    event_path = ctx.env.get("GITHUB_EVENT_PATH")
     repo = ctx.env.get("GITHUB_REPOSITORY")
-    if not (token and event_path and repo):
-        return "not a GitHub PR context — comment skipped"
-    event = json.loads(Path(event_path).read_text())
-    number = event.get("pull_request", {}).get("number")
+    if not (token and repo):
+        return "not a GitHub context — comment skipped"
+    number = pull_request_number(ctx)
     if not number:
-        return "not a pull_request event — comment skipped"
+        return "not a pull request — comment skipped"
     api = ctx.env.get("GITHUB_API_URL", "https://api.github.com")
     headers = {
         "Authorization": f"Bearer {token}",

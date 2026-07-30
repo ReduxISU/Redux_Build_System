@@ -73,7 +73,7 @@ class NpmEngine(Engine):
 
     def unit_test(self, ctx: RunContext) -> Fragment:
         if not _has_test_script(ctx):
-            return self.skipped("unit-test", "no `test` script in package.json")
+            return self.skipped("unit-test", "no `test` script in package.json", ctx)
         result = self._exec(["npm", "test"], ctx)
         return self._fragment("unit-test", ctx, result, _test_summary(result.out))
 

@@ -29,31 +29,34 @@ class Engine:
     def __init__(self, config: dict):
         self.config = config
 
-    def skipped(self, operation: str, reason: str) -> Fragment:
+    def skipped(self, operation: str, reason: str, ctx: RunContext) -> Fragment:
+        # ctx supplies the variant: fragment filenames are keyed on it, so a skipped
+        # operation without one would clobber its sibling across a matrix run.
         return Fragment(
             engine=self.name,
             operation=operation,
             status=Status.skipped,
             summary=reason,
+            variant=ctx.variant,
         )
 
     def audit(self, ctx: RunContext) -> Fragment:
-        return self.skipped("audit", "not implemented")
+        return self.skipped("audit", "not implemented", ctx)
 
     def format_check(self, ctx: RunContext) -> Fragment:
-        return self.skipped("format-check", "not implemented")
+        return self.skipped("format-check", "not implemented", ctx)
 
     def lint(self, ctx: RunContext) -> Fragment:
-        return self.skipped("lint", "not implemented")
+        return self.skipped("lint", "not implemented", ctx)
 
     def unit_test(self, ctx: RunContext) -> Fragment:
-        return self.skipped("unit-test", "not implemented")
+        return self.skipped("unit-test", "not implemented", ctx)
 
     def build(self, ctx: RunContext) -> Fragment:
         artifact = self.config.get("artifact", {})
         dockerfile = ctx.cwd / artifact.get("dockerfile", "Dockerfile")
         if not dockerfile.is_file():
-            return self.skipped("build", f"no {dockerfile.name}")
+            return self.skipped("build", f"no {dockerfile.name}", ctx)
         tag = docker.local_tag(self.config)
         cmd = ["docker", "buildx", "build", "--load", "-f", str(dockerfile), "-t", tag]
         if ctx.is_github:
@@ -67,10 +70,10 @@ class Engine:
         return self._fragment("build", ctx, result, summary)
 
     def integration_test(self, ctx: RunContext) -> Fragment:
-        return self.skipped("integration-test", "not implemented")
+        return self.skipped("integration-test", "not implemented", ctx)
 
     def push(self, ctx: RunContext) -> Fragment:
-        return self.skipped("push", "not implemented")
+        return self.skipped("push", "not implemented", ctx)
 
     def run_operation(self, operation: str, ctx: RunContext) -> Fragment:
         return getattr(self, operation.replace("-", "_"))(ctx)
