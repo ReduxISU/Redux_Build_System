@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -189,10 +190,23 @@ def _lint_summary(result: CmdResult, findings: list[Finding]) -> str:
 
 
 def _test_summary(out: str) -> str:
-    passed = search(r"\d+ passed", out, "")
-    failed = search(r"\d+ failed", out, "")
-    parts = [part for part in (failed, passed) if part]
+    # Two shapes: "7 passed" (vitest, jest) and "ℹ pass 7" (node --test).
+    passed = _test_count(out, r"(\d+) passed", r"^[^\d\n]*pass (\d+)")
+    failed = _test_count(out, r"(\d+) failed", r"^[^\d\n]*fail (\d+)")
+    parts = [
+        f"{count} {label}"
+        for count, label in ((failed, "failed"), (passed, "passed"))
+        if count
+    ]
     return " · ".join(parts) if parts else "no tests reported"
+
+
+def _test_count(out: str, *patterns: str) -> int:
+    for pattern in patterns:
+        match = re.search(pattern, out, re.MULTILINE)
+        if match:
+            return int(match.group(1))
+    return 0
 
 
 def _has_test_script(ctx: RunContext) -> bool:

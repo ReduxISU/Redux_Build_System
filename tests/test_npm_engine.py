@@ -245,3 +245,30 @@ def test_unit_test_failure_reports_failed_count(tmp_path, monkeypatch):
     frag = NpmEngine({}).unit_test(_ctx(tmp_path))
     assert frag.status == Status.failure
     assert "2 failed" in frag.summary
+
+
+def test_unit_test_understands_node_builtin_runner(tmp_path, monkeypatch):
+    # `node --test` prints "ℹ pass 7", not "7 passed" — reporting "no tests reported"
+    # for a suite that ran is worse than useless.
+    out = "ℹ tests 7\nℹ suites 0\nℹ pass 7\nℹ fail 0\nℹ duration_ms 46.8\n"
+    _package_json(tmp_path, {"test": "node --test"})
+    monkeypatch.setattr(basemod, "run", _fixed(0, out))
+    frag = NpmEngine({}).unit_test(_ctx(tmp_path))
+    assert frag.status == Status.success
+    assert frag.summary == "7 passed"
+
+
+def test_unit_test_node_runner_failure(tmp_path, monkeypatch):
+    out = "ℹ tests 7\nℹ pass 5\nℹ fail 2\n"
+    _package_json(tmp_path, {"test": "node --test"})
+    monkeypatch.setattr(basemod, "run", _fixed(1, out))
+    frag = NpmEngine({}).unit_test(_ctx(tmp_path))
+    assert frag.summary == "2 failed · 5 passed"
+
+
+def test_unit_test_zero_counts_are_not_reported(tmp_path, monkeypatch):
+    # "0 failed" is noise; only non-zero counts belong in a one-line summary.
+    _package_json(tmp_path, {"test": "node --test"})
+    monkeypatch.setattr(basemod, "run", _fixed(0, "ℹ pass 3\nℹ fail 0\n"))
+    frag = NpmEngine({}).unit_test(_ctx(tmp_path))
+    assert frag.summary == "3 passed"
