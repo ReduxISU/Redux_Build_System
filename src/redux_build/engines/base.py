@@ -29,6 +29,14 @@ class Engine:
     def __init__(self, config: dict):
         self.config = config
 
+    def variants(self, operation: str) -> list[str]:
+        """Labels this operation repeats over — e.g. interpreter versions for a test matrix.
+
+        Empty means run it once. Fanning out here rather than in a workflow matrix keeps the
+        whole run inside one container instead of rebuilding the image per leg.
+        """
+        return []
+
     def skipped(self, operation: str, reason: str, ctx: RunContext) -> Fragment:
         # ctx supplies the variant: fragment filenames are keyed on it, so a skipped
         # operation without one would clobber its sibling across a matrix run.

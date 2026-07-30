@@ -79,14 +79,37 @@ class UvEngine(Engine):
         )
         return self._fragment("lint", ctx, result, summary)
 
+    def variants(self, operation: str) -> list[str]:
+        if operation != "unit-test":
+            return []
+        return [
+            str(version)
+            for version in self.config.get("unit-test", {}).get("python-versions", [])
+        ]
+
     def unit_test(self, ctx: RunContext) -> Fragment:
-        cmd = ["uv", "run", "pytest", "-v"]
+        cmd = ["uv", "run"]
+        python = _python_version(ctx.variant)
+        if python:
+            # uv fetches the interpreter on demand, so one container covers the whole version
+            # matrix — no second devcontainer build per leg.
+            cmd += ["--python", python]
+        cmd += ["pytest", "-v"]
         package = self.config.get("package")
         if package:
             cov_min = self.config.get("unit-test", {}).get("coverage-min", 0)
             cmd += [f"--cov={package}", f"--cov-fail-under={cov_min}"]
         result = self._exec(cmd, ctx)
         return self._fragment("unit-test", ctx, result, _test_summary(result.out))
+
+
+def _python_version(variant: str) -> str:
+    """Interpreter a variant selects: `3.12` and `py3.12` both mean 3.12.
+
+    Any other label (a plain matrix tag) selects nothing and the default interpreter is used.
+    """
+    match = re.fullmatch(r"(?:py)?(\d+\.\d+)", variant.strip())
+    return match.group(1) if match else ""
 
 
 def _test_summary(out: str) -> str:

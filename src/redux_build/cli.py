@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import typer
@@ -167,5 +168,13 @@ def ci(
     ctx, engine = _context_and_engine(variant)
     report_mod.clear_fragments(ctx.report_dir)
     for operation in engine.order:
-        _execute(engine, ctx, operation)
+        for label in _labels(engine, ctx, operation):
+            _execute(engine, replace(ctx, variant=label), operation)
     _emit_report(ctx, post=post, soft=soft)
+
+
+def _labels(engine, ctx: RunContext, operation: str) -> list[str]:
+    """An explicit --variant pins the run to one leg; otherwise the engine may fan it out."""
+    if ctx.variant:
+        return [ctx.variant]
+    return engine.variants(operation) or [""]

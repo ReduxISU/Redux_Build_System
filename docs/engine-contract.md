@@ -11,6 +11,16 @@ engine does not support is left to the base default, which returns `status = ski
 
 `order` is the toolchain's default `ci` sequence — the operations `rbs ci` runs, in order.
 
+## Fanning an operation out
+
+`variants(operation) -> list[str]` returns the labels an operation should be repeated over; empty
+(the default) means run it once. `rbs ci` runs one leg per label and tags each `Fragment` with it,
+so the fragments land in separate files and the report shows separate rows.
+
+`UvEngine` uses this for `[unit-test] python-versions`, resolving each label to an interpreter via
+`uv run --python`. Keeping the fan-out here rather than in a workflow matrix means every leg shares
+the one container the job already built.
+
 ## Result: `Fragment`
 
 Every operation returns a `Fragment` (`models.py`), the unit the reporter aggregates:

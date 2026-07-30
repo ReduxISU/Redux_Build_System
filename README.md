@@ -170,6 +170,24 @@ CI. Workflow steps therefore carry a uniform, policy-free `continue-on-error: tr
 For branch protection / rulesets this means you require **one** status check — the report job —
 rather than one per operation. It cannot go stale as operations are added.
 
+### Test matrices run inside one container
+
+`[unit-test] python-versions` fans `unit-test` out over several interpreters, and `rbs ci` runs
+each leg in sequence:
+
+```
+| unit-test · 3.12 | ✅ | 65 passed · coverage 86% | 27.5s |
+| unit-test · 3.13 | ✅ | 65 passed · coverage 86% | 16.3s |
+```
+
+This is deliberately **not** a workflow matrix. `uv` fetches interpreters on demand, so both legs
+run inside the single devcontainer the job already built — a GitHub matrix would rebuild that image
+once per leg and roughly double the wall clock for no extra coverage. Everything else still runs
+once; only operations an engine declares in `variants()` fan out.
+
+`rbs unit-test --variant 3.12` (or `py3.12`) pins a single leg, and an explicit `--variant` on
+`rbs ci` does the same for the whole run.
+
 **The artifact hand-off — the point of the whole design:**
 
 ```
@@ -244,8 +262,9 @@ dockerfile = "Dockerfile"                  # optional, default "Dockerfile"
 context = "."                              # optional, default "."
 ```
 
-**Consumed today:** `engine`, `package`, `unit-test.coverage-min`, `artifact.{image,name,dockerfile,context}`.
-Keys for unimplemented operations (`[integration]`, `[push]`, matrix `python-versions`) are defined in
+**Consumed today:** `engine`, `package`, `unit-test.{coverage-min,python-versions}`,
+`artifact.{image,name,dockerfile,context}`.
+Keys for unimplemented operations (`[integration]`, `[push]`) are defined in
 [`docs/onboarding.md`](docs/onboarding.md) and are inert until those operations land.
 
 `build` derives `local/<name>:ci` from `artifact.name`, else the last path segment of
