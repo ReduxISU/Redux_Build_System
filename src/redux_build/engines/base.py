@@ -107,8 +107,11 @@ class Engine:
         result: CmdResult,
         summary: str,
         findings: list[Finding] | None = None,
+        status: Status | None = None,
     ) -> Fragment:
-        status = Status.success if result.ok else Status.failure
+        # `status` overrides the exit code for tools that report problems but still exit 0 —
+        # `dotnet list package --vulnerable` is one.
+        status = status or (Status.success if result.ok else Status.failure)
         return Fragment(
             engine=self.name,
             operation=operation,

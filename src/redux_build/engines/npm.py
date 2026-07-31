@@ -9,7 +9,7 @@ from redux_build.context import RunContext
 from redux_build.engines.base import Engine
 from redux_build.models import Finding, Fragment
 from redux_build.runner import CmdResult
-from redux_build.text import search
+from redux_build.text import relative, search
 
 _SEVERITY_ORDER = ["critical", "high", "moderate", "low", "error", "warning", "info"]
 
@@ -91,7 +91,7 @@ def _eslint_findings(raw: str, cwd: Path) -> list[Finding]:
     findings = [
         Finding(
             message=message.get("message", ""),
-            location=f"{_relative(entry.get('filePath', ''), cwd)}:{message.get('line', 0)}",
+            location=f"{relative(entry.get('filePath', ''), cwd)}:{message.get('line', 0)}",
             rule=message.get("ruleId") or "",
             severity="error" if message.get("severity") == 2 else "warning",
         )
@@ -218,13 +218,6 @@ def _has_test_script(ctx: RunContext) -> bool:
     except json.JSONDecodeError:
         return False
     return bool(data.get("scripts", {}).get("test"))
-
-
-def _relative(path: str, cwd: Path) -> str:
-    try:
-        return str(Path(path).relative_to(cwd))
-    except ValueError:
-        return path
 
 
 def _as_text(value) -> str:

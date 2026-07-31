@@ -31,15 +31,25 @@ def run(
     several (biome, npm) print notices to stderr that would otherwise corrupt the document.
     """
     start = time.monotonic()
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env,
-        shell=shell,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            shell=shell,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+        )
+    except (FileNotFoundError, NotADirectoryError):
+        # A tool missing from this environment is a failed operation, not a crashed pipeline —
+        # every other gate must still get its turn. 127 is the shell's "command not found".
+        name = cmd if isinstance(cmd, str) else cmd[0]
+        return CmdResult(
+            rc=127,
+            out=f"rbs: command not found: {name}",
+            duration_s=round(time.monotonic() - start, 2),
+        )
     return CmdResult(
         rc=proc.returncode,
         out=proc.stdout,

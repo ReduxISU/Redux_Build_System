@@ -54,7 +54,7 @@ no `lint` module that branches on language.
 |---|---|---|---|
 | `uv` | Python + uv (ruff, black, pytest, pip-audit) | `quantumsolver`, this repo | implemented |
 | `npm` | Node (npm audit, biome, eslint) | `Redux_GUI` | implemented |
-| `dotnet` | .NET SDK (`dotnet test`, analyzers) | `Redux` | planned |
+| `dotnet` | .NET SDK (`dotnet list package`/`format`/`build`/`test`) | `Redux` | implemented |
 
 Two things the `npm` engine does deliberately:
 
@@ -66,6 +66,20 @@ Two things the `npm` engine does deliberately:
 
 Tools run via `npx --no-install` — the node analogue of `uv run` — so a missing devDependency fails
 loudly instead of being silently fetched from the registry mid-gate.
+
+The `dotnet` engine needs no third-party tooling — the SDK is the whole toolchain — but two things
+about it are worth knowing:
+
+- **`lint` is `dotnet build`.** `Redux/Directory.Build.props` sets `TreatWarningsAsErrors`, so the
+  compiler and analyzers together are the lint gate. `format-check` and `lint` emit the same MSBuild
+  diagnostic format, so one parser turns both into findings (deduped — MSBuild repeats a diagnostic
+  once per referencing project).
+- **`audit` ignores the exit code.** `dotnet list package --vulnerable` exits 0 whether or not it
+  finds anything, so status comes from the JSON document instead. Getting this wrong would be a
+  silent false pass.
+
+The solution is always named explicitly (`solution` in `rbs.toml`, else the single `*.slnx`/`*.sln`
+found on disk) because a bare `dotnet build` errors MSB1011 when a `.csproj` sits beside it.
 
 Adding a stack = one new class in `src/redux_build/engines/` subclassing `Engine`. Container
 operations (`build` / `integration-test` / `push`) are identical everywhere, so they live on the base
@@ -496,13 +510,13 @@ fragment JSON.
 |---|---|
 | `audit`, `format-check`, `lint`, `unit-test` (uv engine) | ✅ implemented |
 | `audit`, `format-check`, `lint`, `unit-test` (npm engine) | ✅ implemented |
+| `audit`, `format-check`, `lint`, `unit-test` (dotnet engine) | ✅ implemented |
 | `build` — local image via `docker buildx --load` | ✅ implemented |
 | `report` — fragments, markdown, findings, sticky comment + job summary | ✅ implemented |
 | `integration-test` | ⬜ next |
 | `push` | ⬜ planned |
 | `rbs ci` — run the engine's full ordered pipeline | ⬜ planned |
 | Reusable workflows + `setup-rbs` action | ⬜ planned |
-| `dotnet` engine | ⬜ planned |
 | `deploy` — pull-based compose deploy | ⬜ planned |
 
 Unimplemented operations report `skipped`, never a false pass.

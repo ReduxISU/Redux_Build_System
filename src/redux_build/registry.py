@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from redux_build.engines.base import Engine
+from redux_build.engines.dotnet import DotnetEngine
 from redux_build.engines.npm import NpmEngine
 from redux_build.engines.uv import UvEngine
 
@@ -12,6 +13,7 @@ class UnknownEngine(Exception):
 ENGINES: dict[str, type[Engine]] = {
     UvEngine.name: UvEngine,
     NpmEngine.name: NpmEngine,
+    DotnetEngine.name: DotnetEngine,
 }
 
 
