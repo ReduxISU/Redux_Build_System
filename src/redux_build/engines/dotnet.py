@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from collections import Counter
 from pathlib import Path
+from xml.etree import ElementTree
 
 from redux_build.context import RunContext
 from redux_build.engines.base import Engine
@@ -88,8 +90,39 @@ class DotnetEngine(Engine):
         )
 
     def unit_test(self, ctx: RunContext) -> Fragment:
-        result = self._exec(self._dotnet(ctx, "test", "-c", CONFIGURATION), ctx)
-        return self._fragment("unit-test", ctx, result, _test_summary(result.out))
+        # Coverage goes to a fresh temp dir so a previous run's report can never be counted;
+        # instrumentation needs a real build, so this deliberately does not pass --no-build.
+        with tempfile.TemporaryDirectory() as results:
+            result = self._exec(
+                self._dotnet(
+                    ctx,
+                    "test",
+                    "-c",
+                    CONFIGURATION,
+                    "--collect",
+                    "XPlat Code Coverage",
+                    "--results-directory",
+                    results,
+                ),
+                ctx,
+            )
+            coverage = _coverage(Path(results))
+        minimum = self.config.get("unit-test", {}).get("coverage-min", 0)
+        summary = _test_summary(result.out)
+        status = None
+        if coverage is not None:
+            summary += f" · coverage {coverage:.0f}%"
+            if coverage < minimum:
+                summary += f" (min {minimum}%)"
+                status = Status.failure
+        return self._fragment(
+            "unit-test",
+            ctx,
+            result,
+            summary,
+            status=status,
+            metrics={"coverage": round(coverage, 1)} if coverage is not None else {},
+        )
 
     def _dotnet(self, ctx: RunContext, verb: str, *args: str) -> list[str]:
         """`dotnet <verb> <solution> …` — the solution is named explicitly because a bare
@@ -198,6 +231,23 @@ def _lint_summary(result: CmdResult, findings: list[Finding]) -> str:
     if parts:
         return ", ".join(parts)
     return "0 issues" if result.ok else "build failed"
+
+
+def _coverage(results: Path) -> float | None:
+    """Line coverage across every cobertura report the collector wrote.
+
+    Summed rather than averaged so several test projects merge correctly. None when nothing was
+    produced — a project without `coverlet.collector` simply gets no coverage gate.
+    """
+    covered = valid = 0
+    for report in results.rglob("coverage.cobertura.xml"):
+        try:
+            root = ElementTree.parse(report).getroot()
+        except ElementTree.ParseError:
+            continue
+        covered += int(root.get("lines-covered", 0))
+        valid += int(root.get("lines-valid", 0))
+    return 100 * covered / valid if valid else None
 
 
 def _test_summary(out: str) -> str:

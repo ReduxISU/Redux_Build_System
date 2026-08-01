@@ -77,6 +77,10 @@ about it are worth knowing:
 - **`audit` ignores the exit code.** `dotnet list package --vulnerable` exits 0 whether or not it
   finds anything, so status comes from the JSON document instead. Getting this wrong would be a
   silent false pass.
+- **`unit-test` gates on coverage** via `coverlet.collector`, reading the cobertura reports it
+  writes to a temp directory. Reports from several test projects are *summed*, not averaged, so a
+  small fully-covered project cannot mask a large bare one. A project without the collector simply
+  gets no coverage gate rather than a spurious 0%.
 
 The solution is always named explicitly (`solution` in `rbs.toml`, else the single `*.slnx`/`*.sln`
 found on disk) because a bare `dotnet build` errors MSB1011 when a `.csproj` sits beside it.

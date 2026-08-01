@@ -261,3 +261,82 @@ def test_unit_test_with_no_recognisable_output(tmp_path, monkeypatch):
     monkeypatch.setattr(basemod, "run", _fixed(1, "crashed"))
     frag = DotnetEngine({}).unit_test(_ctx(tmp_path))
     assert frag.summary == "no tests reported"
+
+
+# ── coverage gate ────────────────────────────────────────────────────────────
+
+
+def _cobertura(covered, valid):
+    return (
+        f'<?xml version="1.0"?><coverage line-rate="{covered / valid:.4f}" '
+        f'lines-covered="{covered}" lines-valid="{valid}"></coverage>'
+    )
+
+
+def _with_coverage(monkeypatch, reports):
+    """Stand in for the collector: drop cobertura files into --results-directory."""
+
+    def _run(cmd, *_args, **_kwargs):
+        results = Path(cmd[cmd.index("--results-directory") + 1])
+        for index, body in enumerate(reports):
+            target = results / f"run{index}" / "coverage.cobertura.xml"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body)
+        return CmdResult(rc=0, out=TEST_OUT, duration_s=0.1)
+
+    monkeypatch.setattr(basemod, "run", _run)
+
+
+def test_coverage_appended_to_the_summary(tmp_path, monkeypatch):
+    _with_coverage(monkeypatch, [_cobertura(8293, 13500)])
+    frag = DotnetEngine({}).unit_test(_ctx(tmp_path))
+    assert frag.summary == "680 passed · coverage 61%"
+    assert frag.status == Status.success
+
+
+def test_coverage_below_minimum_fails_even_when_tests_pass(tmp_path, monkeypatch):
+    _with_coverage(monkeypatch, [_cobertura(8293, 13500)])
+    frag = DotnetEngine({"unit-test": {"coverage-min": 85}}).unit_test(_ctx(tmp_path))
+    assert frag.status == Status.failure
+    assert frag.summary == "680 passed · coverage 61% (min 85%)"
+
+
+def test_coverage_at_the_minimum_passes(tmp_path, monkeypatch):
+    _with_coverage(monkeypatch, [_cobertura(60, 100)])
+    frag = DotnetEngine({"unit-test": {"coverage-min": 60}}).unit_test(_ctx(tmp_path))
+    assert frag.status == Status.success
+
+
+def test_reports_from_several_projects_are_summed(tmp_path, monkeypatch):
+    # Summed, not averaged — a tiny fully-covered project must not mask a large bare one.
+    _with_coverage(monkeypatch, [_cobertura(10, 10), _cobertura(0, 90)])
+    frag = DotnetEngine({}).unit_test(_ctx(tmp_path))
+    assert frag.summary == "680 passed · coverage 10%"
+
+
+def test_coverage_recorded_as_a_metric(tmp_path, monkeypatch):
+    _with_coverage(monkeypatch, [_cobertura(8293, 13500)])
+    frag = DotnetEngine({}).unit_test(_ctx(tmp_path))
+    assert frag.metrics == {"coverage": 61.4}
+
+
+def test_no_gate_when_the_collector_produced_nothing(tmp_path, monkeypatch):
+    _with_coverage(monkeypatch, [])
+    frag = DotnetEngine({"unit-test": {"coverage-min": 85}}).unit_test(_ctx(tmp_path))
+    assert frag.status == Status.success
+    assert frag.summary == "680 passed"
+    assert frag.metrics == {}
+
+
+def test_malformed_cobertura_is_ignored(tmp_path, monkeypatch):
+    _with_coverage(monkeypatch, ["<not-xml"])
+    frag = DotnetEngine({}).unit_test(_ctx(tmp_path))
+    assert frag.summary == "680 passed"
+
+
+def test_collector_requested_with_a_clean_results_directory(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=TEST_OUT))
+    DotnetEngine({}).unit_test(_ctx(tmp_path))
+    assert "XPlat Code Coverage" in seen[0]
+    assert "--no-build" not in seen[0]  # instrumentation needs a real build

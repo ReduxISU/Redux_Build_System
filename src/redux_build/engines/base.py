@@ -108,6 +108,7 @@ class Engine:
         summary: str,
         findings: list[Finding] | None = None,
         status: Status | None = None,
+        metrics: dict | None = None,
     ) -> Fragment:
         # `status` overrides the exit code for tools that report problems but still exit 0 —
         # `dotnet list package --vulnerable` is one.
@@ -120,4 +121,5 @@ class Engine:
             variant=ctx.variant,
             duration_s=result.duration_s,
             findings=findings or [],
+            metrics=metrics or {},
         )
