@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from redux_build import docker
+import time
+
+from redux_build import docker, stack
 from redux_build.context import RunContext
 from redux_build.models import Finding, Fragment, Status
 from redux_build.runner import CmdResult, run
+from redux_build.text import test_counts
 
 
 class Engine:
@@ -78,7 +81,67 @@ class Engine:
         return self._fragment("build", ctx, result, summary)
 
     def integration_test(self, ctx: RunContext) -> Fragment:
-        return self.skipped("integration-test", "not implemented", ctx)
+        """Run the repo's integration suite against the image `build` just produced.
+
+        The artifact is started in a throwaway network alongside whatever services it needs, and
+        the suite is pointed at it via RBS_BASE_URL. The bytes under test are the bytes that ship
+        — nothing round-trips through a registry first.
+        """
+        integration = self.config.get("integration", {})
+        command = integration.get("command")
+        if not command:
+            return self.skipped("integration-test", "no [integration] command", ctx)
+
+        services = stack.plan(self.config)
+        artifact = services[-1]
+        started = time.monotonic()
+        topology = stack.bring_up(ctx, services, stack.run_id(self.config))
+        try:
+            timeout = int(integration.get("timeout", stack.DEFAULT_TIMEOUT_S))
+            unready = stack.wait_until_ready(ctx, topology, services, timeout)
+            if unready:
+                return self._unready(unready, topology, ctx, started, timeout)
+            result = self._exec(
+                command,
+                ctx,
+                env={**ctx.env, **stack.test_env(topology, artifact)},
+                shell=True,
+            )
+            counts = test_counts(result.out)
+            summary = f"{artifact.health_path} ready" + (
+                f" · {counts}" if counts else ""
+            )
+            return self._fragment(
+                "integration-test",
+                ctx,
+                result,
+                summary if result.ok else counts or "tests failed",
+            )
+        finally:
+            # The only cleanup hook there is: `cli._execute` has no lifecycle, so a container
+            # left behind here is left behind for good.
+            stack.tear_down(ctx, topology)
+
+    def _unready(
+        self,
+        name: str,
+        topology: stack.Stack,
+        ctx: RunContext,
+        started: float,
+        timeout: int,
+    ) -> Fragment:
+        container = f"{topology.network}-{name}"
+        result = CmdResult(
+            rc=1, out="", duration_s=round(time.monotonic() - started, 2)
+        )
+        findings = [
+            Finding(message=line, location=name, severity="error")
+            for line in docker.logs(ctx, container)
+        ]
+        reason = _unready_reason(ctx, name, container, topology, timeout)
+        return self._fragment(
+            "integration-test", ctx, result, f"`{name}` {reason}", findings=findings
+        )
 
     def push(self, ctx: RunContext) -> Fragment:
         return self.skipped("push", "not implemented", ctx)
@@ -88,14 +151,19 @@ class Engine:
 
     def _exec(
         self,
-        cmd: list[str],
+        cmd: list[str] | str,
         ctx: RunContext,
         echo: bool = True,
         merge_stderr: bool = True,
+        env: dict | None = None,
+        shell: bool = False,
     ) -> CmdResult:
         """Run a tool. `echo=False` for JSON invocations — the reporter prints the parsed
-        findings instead, so logs stay readable rather than dumping a raw document."""
-        result = run(cmd, ctx.cwd, merge_stderr=merge_stderr)
+        findings instead, so logs stay readable rather than dumping a raw document.
+
+        `env`/`shell` serve `integration-test`, whose command comes from rbs.toml as a string and
+        needs the stack's addresses in its environment."""
+        result = run(cmd, ctx.cwd, env=env, shell=shell, merge_stderr=merge_stderr)
         if echo and result.out.strip():
             print(result.out.rstrip("\n"))
         return result
@@ -123,3 +191,16 @@ class Engine:
             findings=findings or [],
             metrics=metrics or {},
         )
+
+
+def _unready_reason(
+    ctx: RunContext, name: str, container: str, topology: stack.Stack, timeout: int
+) -> str:
+    """Why a service never answered — the three cases read very differently to whoever is
+    debugging, and "not ready after 180s" on a container that died in a second is a lie.
+    """
+    if name not in topology.urls:
+        return "failed to start"
+    if not docker.is_running(ctx, container):
+        return "exited before becoming ready"
+    return f"not ready after {timeout}s"

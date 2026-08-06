@@ -281,9 +281,11 @@ context = "."                              # optional, default "."
 ```
 
 **Consumed today:** `engine`, `package`, `unit-test.{coverage-min,python-versions}`,
-`artifact.{image,name,dockerfile,context}`.
-Keys for unimplemented operations (`[integration]`, `[push]`) are defined in
-[`docs/onboarding.md`](docs/onboarding.md) and are inert until those operations land.
+`artifact.{image,name,dockerfile,context,port,health-path}`,
+`integration.{command,timeout,env,services}`.
+Keys for `[push]` are defined in [`docs/onboarding.md`](docs/onboarding.md) and are inert until that
+operation lands. The full `[integration]` schema — dependency services, their environment, and the
+`RBS_BASE_URL` / `RBS_URL_<SERVICE>` variables handed to the suite — is documented there too.
 
 `build` derives `local/<name>:ci` from `artifact.name`, else the last path segment of
 `artifact.image`, else `package`.
@@ -517,10 +519,10 @@ fragment JSON.
 | `audit`, `format-check`, `lint`, `unit-test` (dotnet engine) | ✅ implemented |
 | `build` — local image via `docker buildx --load` | ✅ implemented |
 | `report` — fragments, markdown, findings, sticky comment + job summary | ✅ implemented |
-| `integration-test` | ⬜ next |
-| `push` | ⬜ planned |
-| `rbs ci` — run the engine's full ordered pipeline | ⬜ planned |
-| Reusable workflows + `setup-rbs` action | ⬜ planned |
+| `integration-test` — ephemeral stack around the built image | ✅ implemented |
+| `rbs ci` — run the engine's full ordered pipeline | ✅ implemented |
+| Reusable workflow (`ci.yml`, runs in the caller's devcontainer) | ✅ implemented |
+| `push` | ⬜ next |
 | `deploy` — pull-based compose deploy | ⬜ planned |
 
 Unimplemented operations report `skipped`, never a false pass.

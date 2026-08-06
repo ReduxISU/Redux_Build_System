@@ -54,6 +54,50 @@ command = "uv run pytest tests/integration -v"
 on-branch = "main"
 ```
 
+### `[integration]` in full
+
+`integration-test` starts the image `build` just produced on a throwaway network, waits for it to
+answer on `[artifact] health-path`, and runs `command`. A repo whose artifact needs company
+declares those services too — the GUI's proxy is useless without a backend behind it:
+
+```toml
+[integration]
+command = "npm run test:e2e"
+timeout = 240                       # seconds to wait for readiness; default 180
+
+# Started before the artifact, in the order declared, each reachable at its `name`.
+[[integration.services]]
+name = "redux-api"
+image = "ghcr.io/reduxisu/redux:latest"
+port = 27000
+health-path = "/Navigation/Batch/allProblems"
+
+# Environment for the artifact container. Address dependencies by service name.
+[integration.env]
+REDUX_BASE_URL = "http://redux-api:27000/"
+```
+
+A service may carry its own `env` the same way (`[integration.services.env]`, or inline
+`env = { KEY = "value" }`), which is how you would point Redux at a quantumsolver container.
+
+**`command` receives the addresses in its environment** — do not hardcode them:
+
+| Variable | Value |
+|---|---|
+| `RBS_BASE_URL` | the artifact under test |
+| `RBS_URL_<SERVICE>` | each service, name upper-cased with `-` → `_` (e.g. `RBS_URL_REDUX_API`) |
+
+The suite must not start anything itself. Lifecycle belongs to rbs so that a laptop, a devcontainer
+and CI all bring the stack up the same way.
+
+**Health paths need to mean "ready", not "listening".** Pick a route that exercises the app's real
+startup. Redux has no `/health`, so it uses `Navigation/Batch/allProblems`, whose first call forces
+the assembly scan that builds the problem registry.
+
+If a service never becomes ready, the operation fails with that container's last log lines attached
+as findings — and it fails immediately if the container has already exited, rather than waiting out
+the timeout.
+
 ## 2. A thin caller workflow
 
 `.github/workflows/ci.yml`:
