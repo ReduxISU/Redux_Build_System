@@ -531,6 +531,36 @@ Unimplemented operations report `skipped`, never a false pass.
 
 ## Development
 
+### `scripts/dev-gui.sh` — the dev loop for a consumer repo
+
+Gets you from nothing to a shell inside a consumer repo's devcontainer with `rbs` on the PATH.
+Defaults to `Redux_GUI`; `-t DIR` points it elsewhere.
+
+```bash
+scripts/dev-gui.sh                 # shell in the dev container
+scripts/dev-gui.sh ci              # run the whole pipeline in it
+scripts/dev-gui.sh run build       # run one operation
+scripts/dev-gui.sh down            # remove the container (volumes kept)
+scripts/dev-gui.sh reset           # ...and drop node_modules/.next volumes
+```
+
+`devcontainer up` alone mostly works; the value here is the preflight, because each of these fails
+as something that looks unrelated:
+
+- **the app port is already taken** — by a stray dev server, or the *other* mode's container.
+  `--force` reclaims it; switching between normal and `--dev-rbs` drops the other automatically,
+  since both publish port 3000 and only one can be up.
+- **a half-created container gets reused** — a `devcontainer up` that failed during network setup
+  leaves a container with no routes, and the next `up` reuses that same id. It then fails in
+  `postCreate` with a DNS error that has nothing to do with DNS.
+- **an interrupted `rbs integration-test`** leaves labelled containers, a network, and the dev
+  container still attached to it. Swept on every launch, and by `down`.
+- **a cached image pins rbs** — the feature installs into the *image*, so a hub change pushed since
+  that image was built simply is not there, and shows up as a bare `No such command`. The script
+  says so and points at `--rebuild` (or `--dev-rbs`, which always installs the working tree).
+
+`--dev-rbs` delegates to `rbs_dev.sh` below.
+
 ### `rbs_dev.sh` — testing an unreleased rbs against a real repo
 
 Maintainer tool. Runs **this working tree** against another repo, so you can iterate on an engine

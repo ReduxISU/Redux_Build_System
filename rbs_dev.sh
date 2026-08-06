@@ -105,6 +105,11 @@ down() {
   echo "rbs_dev: removed dev container and $TMPDIR_REL (named volumes kept)"
 }
 
+# Being sourced (scripts/dev-gui.sh does, to reuse devc) must define the helpers and stop there.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
+  return 0
+fi
+
 MODE=host
 while [ $# -gt 0 ]; do
   case "$1" in
