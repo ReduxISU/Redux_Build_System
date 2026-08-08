@@ -18,6 +18,15 @@ _BIOME_LABELS = {
     "assist/source/organizeImports": "import order",
 }
 
+# `path(line,col): error TS2532: message`. Anchored on a non-space first character because tsc
+# indents a diagnostic's elaboration underneath it — those lines belong to the finding above,
+# not to one of their own.
+_TSC_DIAGNOSTIC = re.compile(
+    r"^(?P<path>[^\s(][^(]*)\((?P<line>\d+),\d+\): "
+    r"(?P<severity>error|warning) (?P<rule>TS\d+): (?P<message>.*)$",
+    re.MULTILINE,
+)
+
 
 class NpmEngine(Engine):
     """npm / Node toolchain (Redux_GUI).
@@ -74,6 +83,26 @@ class NpmEngine(Engine):
         findings = _parse(result, lambda raw: _eslint_findings(raw, ctx.cwd))
         return self._fragment(
             "lint", ctx, result, _lint_summary(result, findings), findings
+        )
+
+    def typecheck(self, ctx: RunContext) -> Fragment:
+        # A root tsconfig.json is what makes a repo type-checkable. A plain-JS repo reports
+        # `skipped` rather than passing vacuously — the same policy `unit-test` applies to a
+        # missing `test` script, and it activates on its own the moment types arrive.
+        if not (ctx.cwd / "tsconfig.json").is_file():
+            return self.skipped("typecheck", "no tsconfig.json", ctx)
+        # `--pretty false` because the alternative is an ANSI code frame nothing can parse. tsc
+        # already drops it when stdout is a pipe; this defends against `"pretty": true` in the
+        # tsconfig. stderr stays merged, unlike the JSON gates: there is no document to corrupt,
+        # and an `npx: command not found` there is the only clue the summary would otherwise have.
+        result = self._exec(
+            ["npx", "--no-install", "tsc", "--noEmit", "--pretty", "false", "-p", "tsconfig.json"],
+            ctx,
+            echo=False,
+        )
+        findings = _tsc_findings(result.out)
+        return self._fragment(
+            "typecheck", ctx, result, _tsc_summary(result, findings), findings
         )
 
     def unit_test(self, ctx: RunContext) -> Fragment:
@@ -140,6 +169,34 @@ def _audit_findings(raw: str) -> list[Finding]:
             )
         )
     return _by_severity(findings)
+
+
+def _tsc_findings(raw: str) -> list[Finding]:
+    # Not routed through `_parse`: a regex has no malformed-document failure mode, and tsc emits
+    # paths relative to the directory it ran in, which is already ctx.cwd.
+    findings = [
+        Finding(
+            message=match["message"],
+            location=f"{match['path']}:{match['line']}",
+            rule=match["rule"],
+            severity=match["severity"],
+        )
+        for match in _TSC_DIAGNOSTIC.finditer(raw)
+    ]
+    return _by_severity(findings)
+
+
+def _tsc_summary(result: CmdResult, findings: list[Finding]) -> str:
+    if findings:
+        files = len({finding.location.rsplit(":", 1)[0] for finding in findings})
+        return f"{_plural(len(findings), 'type error')} in {_plural(files, 'file')}"
+    # tsc reports its own configuration problems (TS5058, TS6053) with no file:line to match, so
+    # a non-zero exit having parsed nothing is still a failure — never a silent pass.
+    return "no type errors" if result.ok else "typecheck failed"
+
+
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
 
 
 def _by_severity(findings: list[Finding]) -> list[Finding]:

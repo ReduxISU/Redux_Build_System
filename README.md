@@ -54,7 +54,7 @@ no `lint` module that branches on language.
 | Engine | Toolchain | Repos | Status |
 |---|---|---|---|
 | `uv` | Python + uv (ruff, black, pytest, pip-audit) | `quantumsolver`, this repo | implemented |
-| `npm` | Node (npm audit, biome, eslint) | `Redux_GUI` | implemented |
+| `npm` | Node (npm audit, biome, eslint, tsc) | `Redux_GUI` | implemented |
 | `dotnet` | .NET SDK (`dotnet list package`/`format`/`build`/`test`) | `Redux` | implemented |
 
 Two things the `npm` engine does deliberately:
@@ -64,6 +64,8 @@ Two things the `npm` engine does deliberately:
   vulnerabilities in the linter.
 - **`unit-test` reports `skipped` when `package.json` has no `test` script**, rather than passing
   vacuously. It activates on its own the moment a suite is added.
+- **`typecheck` reports `skipped` without a root `tsconfig.json`**, on the same principle — a
+  plain-JS repo is not failed for lacking types, and gains the gate the day it adds one.
 
 Tools run via `npx --no-install` — the node analogue of `uv run` — so a missing devDependency fails
 loudly instead of being silently fetched from the registry mid-gate.
@@ -519,6 +521,7 @@ fragment JSON.
 | `audit`, `format-check`, `lint`, `unit-test` (uv engine) | ✅ implemented |
 | `audit`, `format-check`, `lint`, `unit-test` (npm engine) | ✅ implemented |
 | `audit`, `format-check`, `lint`, `unit-test` (dotnet engine) | ✅ implemented |
+| `typecheck` (npm engine) | ✅ implemented |
 | `typecheck` (dotnet engine) | ⏭️ skipped — the compiler is the type checker, and `lint` already runs it |
 | `typecheck` (uv engine) | ⬜ not implemented — no mypy/ty gate yet |
 | `build` — local image via `docker buildx --load` | ✅ implemented |

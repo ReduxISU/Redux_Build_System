@@ -77,6 +77,18 @@ AUDIT_JSON = json.dumps(
 )
 
 
+# Real `tsc --noEmit --pretty false` output, captured from Redux_VR. One line per diagnostic —
+# note the TS2339's elaboration is indented beneath it and is not a diagnostic of its own.
+TSC_OUT = """\
+packages/layout/test/formula.test.ts(24,30): error TS2339: Property 'clauses' does not exist on \
+type 'AnyFrame'.
+  Property 'clauses' does not exist on type 'ApiGraphFrame'.
+packages/layout/test/formula.test.ts(37,29): error TS7006: Parameter 'c' implicitly has an 'any' \
+type.
+packages/puzzle/test/layout.test.ts(37,12): error TS2532: Object is possibly 'undefined'.
+"""
+
+
 def _ctx(tmp_path):
     return RunContext(cwd=tmp_path, is_github=False, env={})
 
@@ -90,6 +102,10 @@ def _fixed(rc, out):
 
 def _package_json(tmp_path, scripts):
     (tmp_path / "package.json").write_text(json.dumps({"scripts": scripts}))
+
+
+def _tsconfig(tmp_path):
+    (tmp_path / "tsconfig.json").write_text("{}")
 
 
 # ── audit ────────────────────────────────────────────────────────────────────
@@ -228,6 +244,81 @@ def test_malformed_json_never_raises(tmp_path, monkeypatch):
         frag = engine.run_operation(operation, _ctx(tmp_path))
         assert frag.status == Status.failure
         assert frag.findings == []
+
+
+# ── typecheck ────────────────────────────────────────────────────────────────
+
+
+def test_typecheck_skips_without_a_tsconfig(tmp_path):
+    # Redux_GUI is plain JS: reporting `skipped` beats passing vacuously.
+    frag = NpmEngine({}).typecheck(_ctx(tmp_path))
+    assert frag.status == Status.skipped
+    assert frag.summary == "no tsconfig.json"
+
+
+def test_typecheck_clean(tmp_path, monkeypatch):
+    _tsconfig(tmp_path)
+    monkeypatch.setattr(basemod, "run", _fixed(0, ""))
+    frag = NpmEngine({}).typecheck(_ctx(tmp_path))
+    assert frag.status == Status.success
+    assert frag.summary == "no type errors"
+    assert frag.findings == []
+
+
+def test_typecheck_counts_errors_and_files(tmp_path, monkeypatch):
+    _tsconfig(tmp_path)
+    monkeypatch.setattr(basemod, "run", _fixed(2, TSC_OUT))
+    frag = NpmEngine({}).typecheck(_ctx(tmp_path))
+    assert frag.status == Status.failure
+    assert frag.summary == "3 type errors in 2 files"
+
+
+def test_typecheck_elaborations_are_not_findings(tmp_path, monkeypatch):
+    # tsc indents a diagnostic's explanation beneath it; counted, every union mismatch inflates.
+    _tsconfig(tmp_path)
+    monkeypatch.setattr(basemod, "run", _fixed(2, TSC_OUT))
+    frag = NpmEngine({}).typecheck(_ctx(tmp_path))
+    assert len(frag.findings) == 3
+
+
+def test_typecheck_findings_carry_code_and_location(tmp_path, monkeypatch):
+    _tsconfig(tmp_path)
+    monkeypatch.setattr(basemod, "run", _fixed(2, TSC_OUT))
+    frag = NpmEngine({}).typecheck(_ctx(tmp_path))
+    top = frag.findings[0]
+    assert top.severity == "error"
+    assert top.rule == "TS2339"
+    assert top.location == "packages/layout/test/formula.test.ts:24"
+    assert "'clauses' does not exist" in top.message
+
+
+def test_typecheck_config_error_is_still_a_failure(tmp_path, monkeypatch):
+    # TS5058 and friends carry no file:line, so nothing parses — but the run did not pass.
+    _tsconfig(tmp_path)
+    monkeypatch.setattr(
+        basemod,
+        "run",
+        _fixed(1, "error TS5058: The specified path does not exist: 'nope.json'."),
+    )
+    frag = NpmEngine({}).typecheck(_ctx(tmp_path))
+    assert frag.status == Status.failure
+    assert frag.summary == "typecheck failed"
+    assert frag.findings == []
+
+
+def test_typecheck_argv(tmp_path, monkeypatch):
+    _tsconfig(tmp_path)
+    seen = []
+
+    def _capture(cmd, *_args, **_kwargs):
+        seen.append(cmd)
+        return CmdResult(rc=0, out="", duration_s=0.1)
+
+    monkeypatch.setattr(basemod, "run", _capture)
+    NpmEngine({}).typecheck(_ctx(tmp_path))
+    assert seen == [
+        ["npx", "--no-install", "tsc", "--noEmit", "--pretty", "false", "-p", "tsconfig.json"]
+    ]
 
 
 # ── unit-test ────────────────────────────────────────────────────────────────
