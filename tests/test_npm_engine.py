@@ -194,6 +194,20 @@ def test_lint_clean(tmp_path, monkeypatch):
     assert frag.summary == "0 problems"
 
 
+def test_lint_keeps_stderr_out_of_the_json(tmp_path, monkeypatch):
+    # Merged, an npx or eslint notice on stderr lands inside the document and every finding
+    # disappears into `_parse` — while the summary still reads plausibly.
+    seen = {}
+
+    def _capture(cmd, cwd, **kwargs):
+        seen.update(kwargs)
+        return CmdResult(rc=0, out="[]", duration_s=0.1)
+
+    monkeypatch.setattr(basemod, "run", _capture)
+    NpmEngine({}).lint(_ctx(tmp_path))
+    assert seen["merge_stderr"] is False
+
+
 def test_lint_falls_back_to_text_when_json_is_unparseable(tmp_path, monkeypatch):
     # A crashed tool must not crash rbs; the exit code still gates.
     monkeypatch.setattr(

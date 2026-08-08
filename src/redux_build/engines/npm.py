@@ -65,7 +65,10 @@ class NpmEngine(Engine):
 
     def lint(self, ctx: RunContext) -> Fragment:
         result = self._exec(
-            ["npx", "--no-install", "eslint", ".", "-f", "json"], ctx, echo=False
+            ["npx", "--no-install", "eslint", ".", "-f", "json"],
+            ctx,
+            echo=False,
+            merge_stderr=False,
         )
         findings = _parse(result, lambda raw: _eslint_findings(raw, ctx.cwd))
         return self._fragment(
