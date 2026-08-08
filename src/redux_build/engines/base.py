@@ -13,7 +13,7 @@ class Engine:
     """A toolchain module. Concrete engines implement the operations they support;
     unimplemented operations report `skipped` rather than fail.
 
-    Toolchain operations (audit/format-check/lint/unit-test) are overridden per engine.
+    Toolchain operations (audit/format-check/lint/typecheck/unit-test) are overridden per engine.
     Container operations (build/integration-test/push) are identical across toolchains and
     are implemented here; an engine may still override them."""
 
@@ -22,8 +22,8 @@ class Engine:
 
     # Operations that cannot run unless their prerequisites succeeded — you cannot test an
     # artifact that failed to build, or push one that failed its tests. Quality gates
-    # (audit/format-check/lint/unit-test) deliberately have no prerequisites: they always run
-    # so one CI pass reports every problem at once.
+    # (audit/format-check/lint/typecheck/unit-test) deliberately have no prerequisites: they always
+    # run so one CI pass reports every problem at once.
     requires: dict[str, list[str]] = {
         "integration-test": ["build"],
         "push": ["build", "integration-test"],
@@ -59,6 +59,9 @@ class Engine:
 
     def lint(self, ctx: RunContext) -> Fragment:
         return self.skipped("lint", "not implemented", ctx)
+
+    def typecheck(self, ctx: RunContext) -> Fragment:
+        return self.skipped("typecheck", "not implemented", ctx)
 
     def unit_test(self, ctx: RunContext) -> Fragment:
         return self.skipped("unit-test", "not implemented", ctx)

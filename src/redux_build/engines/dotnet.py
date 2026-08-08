@@ -40,6 +40,7 @@ class DotnetEngine(Engine):
         "audit",
         "format-check",
         "lint",
+        "typecheck",
         "unit-test",
         "build",
         "integration-test",
@@ -88,6 +89,11 @@ class DotnetEngine(Engine):
         return self._fragment(
             "lint", ctx, result, _lint_summary(result, findings), findings
         )
+
+    def typecheck(self, ctx: RunContext) -> Fragment:
+        # The C# compiler is the type checker, and `lint` already runs it under
+        # TreatWarningsAsErrors — a second pass would report the same diagnostics twice.
+        return self.skipped("typecheck", "covered by `lint` (dotnet build)", ctx)
 
     def unit_test(self, ctx: RunContext) -> Fragment:
         # Coverage goes to a fresh temp dir so a previous run's report can never be counted;

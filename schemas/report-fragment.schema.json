@@ -9,7 +9,16 @@
     "engine": { "type": "string", "description": "Toolchain engine, e.g. uv / dotnet / npm." },
     "operation": {
       "type": "string",
-      "enum": ["audit", "format-check", "lint", "unit-test", "build", "integration-test", "push"]
+      "enum": [
+        "audit",
+        "format-check",
+        "lint",
+        "typecheck",
+        "unit-test",
+        "build",
+        "integration-test",
+        "push"
+      ]
     },
     "status": {
       "type": "string",

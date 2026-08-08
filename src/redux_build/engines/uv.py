@@ -18,6 +18,7 @@ class UvEngine(Engine):
         "audit",
         "format-check",
         "lint",
+        "typecheck",
         "unit-test",
         "build",
         "integration-test",

@@ -43,6 +43,7 @@ def test_ci_runs_every_operation_in_engine_order(tmp_path, monkeypatch):
         "audit",
         "format-check",
         "lint",
+        "typecheck",
         "unit-test",
         "build",
         "integration-test",

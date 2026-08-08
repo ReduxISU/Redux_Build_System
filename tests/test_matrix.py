@@ -72,7 +72,7 @@ def test_coverage_gate_still_applied_per_leg(tmp_path, monkeypatch):
 def test_only_unit_test_fans_out():
     engine = UvEngine(MATRIX)
     assert engine.variants("unit-test") == ["3.12", "3.13"]
-    for operation in ("audit", "format-check", "lint", "build", "push"):
+    for operation in ("audit", "format-check", "lint", "typecheck", "build", "push"):
         assert engine.variants(operation) == []
 
 

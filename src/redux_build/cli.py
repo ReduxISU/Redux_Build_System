@@ -112,6 +112,12 @@ def lint(variant: str = VariantOption) -> None:
     _run("lint", variant)
 
 
+@app.command()
+def typecheck(variant: str = VariantOption) -> None:
+    """Static type check, emitting nothing."""
+    _run("typecheck", variant)
+
+
 @app.command("unit-test")
 def unit_test(variant: str = VariantOption) -> None:
     """Unit tests with coverage."""

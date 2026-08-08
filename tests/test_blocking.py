@@ -47,8 +47,8 @@ def test_missing_prerequisite_does_not_block(tmp_path):
 
 
 def test_quality_gates_have_no_prerequisites():
-    # audit/lint/format-check/unit-test must always run so one pass reports every problem.
-    for operation in ("audit", "format-check", "lint", "unit-test"):
+    # audit/format-check/lint/typecheck/unit-test must always run so one pass reports everything.
+    for operation in ("audit", "format-check", "lint", "typecheck", "unit-test"):
         assert Engine.requires.get(operation, []) == []
 
 

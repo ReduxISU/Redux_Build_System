@@ -20,7 +20,16 @@ def test_unknown_engine_raises():
 
 @pytest.mark.parametrize(
     "operation",
-    ["audit", "format-check", "lint", "unit-test", "build", "integration-test", "push"],
+    [
+        "audit",
+        "format-check",
+        "lint",
+        "typecheck",
+        "unit-test",
+        "build",
+        "integration-test",
+        "push",
+    ],
 )
 def test_base_engine_operation_skips(operation):
     engine = Engine({})

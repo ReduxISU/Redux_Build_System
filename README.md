@@ -37,6 +37,7 @@ Every repo, in every language, exposes the same verbs:
 | `audit` | Dependency vulnerability scan |
 | `format-check` | Verify formatting, write nothing |
 | `lint` | Static analysis |
+| `typecheck` | Static type check, emitting nothing |
 | `unit-test` | Unit tests + coverage gate |
 | `build` | Build the deployable artifact **locally** (never pushes) |
 | `integration-test` | Run tests against the locally-built artifact over HTTP |
@@ -155,7 +156,8 @@ Exit code is non-zero when the operation fails.
 
 A PR gate's job is to tell you *everything* that is wrong in one pass, not just the first thing.
 
-**Quality gates** (`audit`, `format-check`, `lint`, `unit-test`) have **no prerequisites**. A lint
+**Quality gates** (`audit`, `format-check`, `lint`, `typecheck`, `unit-test`) have **no
+prerequisites**. A lint
 failure never stops the audit from running. Every one of them reports, every run.
 
 **The artifact chain** is a real data dependency, so it is enforced: you cannot integration-test an
@@ -517,6 +519,8 @@ fragment JSON.
 | `audit`, `format-check`, `lint`, `unit-test` (uv engine) | ✅ implemented |
 | `audit`, `format-check`, `lint`, `unit-test` (npm engine) | ✅ implemented |
 | `audit`, `format-check`, `lint`, `unit-test` (dotnet engine) | ✅ implemented |
+| `typecheck` (dotnet engine) | ⏭️ skipped — the compiler is the type checker, and `lint` already runs it |
+| `typecheck` (uv engine) | ⬜ not implemented — no mypy/ty gate yet |
 | `build` — local image via `docker buildx --load` | ✅ implemented |
 | `report` — fragments, markdown, findings, sticky comment + job summary | ✅ implemented |
 | `integration-test` — ephemeral stack around the built image | ✅ implemented |

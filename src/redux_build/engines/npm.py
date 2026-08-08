@@ -32,6 +32,7 @@ class NpmEngine(Engine):
         "audit",
         "format-check",
         "lint",
+        "typecheck",
         "unit-test",
         "build",
         "integration-test",
