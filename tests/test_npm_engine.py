@@ -352,6 +352,40 @@ def test_unit_test_failure_reports_failed_count(tmp_path, monkeypatch):
     assert "2 failed" in frag.summary
 
 
+def test_unit_test_counts_tests_not_files(tmp_path, monkeypatch):
+    # Real vitest output, captured from Redux_VR. `Test Files` comes first, so a bare
+    # `(\d+) passed` reports 13 for a run of 235 — off by the number of files.
+    out = " Test Files  13 passed (13)\n      Tests  235 passed (235)\n   Duration  325ms\n"
+    _package_json(tmp_path, {"test": "vitest run"})
+    monkeypatch.setattr(basemod, "run", _fixed(0, out))
+    frag = NpmEngine({}).unit_test(_ctx(tmp_path))
+    assert frag.summary == "235 passed"
+
+
+def test_unit_test_counts_tests_not_files_when_failing(tmp_path, monkeypatch):
+    # Same run with two broken tests. Both counts must come off the Tests line — the banner
+    # above it reads "Failed Tests 2", and the Test Files line reports 1 failed.
+    out = (
+        "⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯\n"
+        " Test Files  1 failed | 13 passed (14)\n"
+        "      Tests  2 failed | 236 passed (238)\n"
+    )
+    _package_json(tmp_path, {"test": "vitest run"})
+    monkeypatch.setattr(basemod, "run", _fixed(1, out))
+    frag = NpmEngine({}).unit_test(_ctx(tmp_path))
+    assert frag.status == Status.failure
+    assert frag.summary == "2 failed · 236 passed"
+
+
+def test_unit_test_reads_jest_summary(tmp_path, monkeypatch):
+    # jest writes `Tests:` with a colon, under a `Test Suites:` line that must not win.
+    out = "Test Suites: 1 failed, 2 passed, 3 total\nTests:       4 failed, 40 passed, 44 total\n"
+    _package_json(tmp_path, {"test": "jest"})
+    monkeypatch.setattr(basemod, "run", _fixed(1, out))
+    frag = NpmEngine({}).unit_test(_ctx(tmp_path))
+    assert frag.summary == "4 failed · 40 passed"
+
+
 def test_unit_test_understands_node_builtin_runner(tmp_path, monkeypatch):
     # `node --test` prints "ℹ pass 7", not "7 passed" — reporting "no tests reported"
     # for a suite that ran is worse than useless.

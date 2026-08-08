@@ -21,6 +21,13 @@ _BIOME_LABELS = {
 # `path(line,col): error TS2532: message`. Anchored on a non-space first character because tsc
 # indents a diagnostic's elaboration underneath it — those lines belong to the finding above,
 # not to one of their own.
+# vitest prints `Test Files 13 passed` *above* `Tests 235 passed`, and jest writes `Tests:` — so a
+# bare `(\d+) passed` finds the file count and reports 13 tests where 235 ran. Anchoring on the
+# Tests line first is what makes the number mean tests. Tried before the looser patterns, never
+# instead of them: a runner that prints neither still falls through to those.
+_TESTS_LINE_PASSED = r"^[ \t]*Tests:?[ \t]+.*?(\d+) passed"
+_TESTS_LINE_FAILED = r"^[ \t]*Tests:?[ \t]+.*?(\d+) failed"
+
 _TSC_DIAGNOSTIC = re.compile(
     r"^(?P<path>[^\s(][^(]*)\((?P<line>\d+),\d+\): "
     r"(?P<severity>error|warning) (?P<rule>TS\d+): (?P<message>.*)$",
@@ -252,8 +259,8 @@ def _lint_summary(result: CmdResult, findings: list[Finding]) -> str:
 
 def _test_summary(out: str) -> str:
     # Two shapes: "7 passed" (vitest, jest) and "ℹ pass 7" (node --test).
-    passed = _test_count(out, r"(\d+) passed", r"^[^\d\n]*pass (\d+)")
-    failed = _test_count(out, r"(\d+) failed", r"^[^\d\n]*fail (\d+)")
+    passed = _test_count(out, _TESTS_LINE_PASSED, r"(\d+) passed", r"^[^\d\n]*pass (\d+)")
+    failed = _test_count(out, _TESTS_LINE_FAILED, r"(\d+) failed", r"^[^\d\n]*fail (\d+)")
     parts = [
         f"{count} {label}"
         for count, label in ((failed, "failed"), (passed, "passed"))
