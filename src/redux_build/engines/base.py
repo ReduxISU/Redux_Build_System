@@ -157,10 +157,9 @@ class Engine:
         branch = self.config.get("push", {}).get("on-branch")
         if not (image and branch):
             return self.skipped("push", "no [push] block", ctx)
-        if not ctx.is_github:
-            return self.skipped("push", "only in CI", ctx)
-        if ctx.ref_name != branch:
-            return self.skipped("push", f"only on push to `{branch}`", ctx)
+        gate = _push_gate(ctx, branch)
+        if gate:
+            return self.skipped("push", gate, ctx)
         missing = [
             name for name in ("GITHUB_TOKEN", "GITHUB_SHA") if not ctx.env.get(name)
         ]
@@ -185,6 +184,9 @@ class Engine:
         result.duration_s = round(result.duration_s + login.duration_s, 2)
         if not result.ok:
             return self._fragment("push", ctx, result, "docker push failed")
+        if ctx.dry_run:
+            summary = f"dry run — logged in, would push `{refs[0]}`, `:latest`"
+            return self._fragment("push", ctx, result, summary, status=Status.warning)
         digest = search(r"sha256:[0-9a-f]{64}", result.out, "")
         summary = f"pushed `{refs[0]}`, `:latest`"
         return self._fragment(
@@ -193,10 +195,14 @@ class Engine:
 
     def _ship(self, ctx: RunContext, source: str, refs: list[str]) -> CmdResult:
         """Tag and push each ref in turn, stopping at the first failure. The sha tag goes first so a
-        failed `latest` still leaves an addressable image behind."""
+        failed `latest` still leaves an addressable image behind. A dry run tags but never pushes.
+        """
         total = CmdResult(rc=0, out="", duration_s=0.0)
         for ref in refs:
-            for step in (["docker", "tag", source, ref], ["docker", "push", ref]):
+            steps = [["docker", "tag", source, ref]]
+            if not ctx.dry_run:
+                steps.append(["docker", "push", ref])
+            for step in steps:
                 result = self._exec(step, ctx)
                 total = CmdResult(
                     rc=result.rc,
@@ -252,6 +258,21 @@ class Engine:
             findings=findings or [],
             metrics=metrics or {},
         )
+
+
+def _push_gate(ctx: RunContext, branch: str) -> str:
+    """Why `push` must not publish from here, or "" when it may.
+
+    A dry run bypasses both gates on purpose: its whole point is to rehearse login and tagging
+    from a feature branch or a laptop, and it never reaches the registry anyway.
+    """
+    if ctx.dry_run:
+        return ""
+    if not ctx.is_github:
+        return "only in CI"
+    if ctx.ref_name != branch:
+        return f"only on push to `{branch}`"
+    return ""
 
 
 def _unready_reason(

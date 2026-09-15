@@ -21,6 +21,11 @@ app = typer.Typer(
 VariantOption = typer.Option(
     "", "--variant", help="Matrix variant label (e.g. py3.12)."
 )
+DryRunOption = typer.Option(
+    False,
+    "--dry-run",
+    help="Rehearse `push` on any branch: log in and tag, but never push to the registry.",
+)
 
 
 def _version_cb(value: bool) -> None:
@@ -47,8 +52,10 @@ def _resolve_engine(ctx: RunContext):
     return get_engine(config_mod.engine_name(config), config)
 
 
-def _context_and_engine(variant: str) -> tuple[RunContext, object]:
-    ctx = RunContext.detect(variant=variant)
+def _context_and_engine(
+    variant: str, dry_run: bool = False
+) -> tuple[RunContext, object]:
+    ctx = RunContext.detect(variant=variant, dry_run=dry_run)
     try:
         return ctx, _resolve_engine(ctx)
     except (config_mod.ConfigError, UnknownEngine) as exc:
@@ -88,8 +95,8 @@ def _emit_report(ctx: RunContext, post: bool, soft: bool) -> None:
         raise typer.Exit(code=1)
 
 
-def _run(operation: str, variant: str) -> None:
-    ctx, engine = _context_and_engine(variant)
+def _run(operation: str, variant: str, dry_run: bool = False) -> None:
+    ctx, engine = _context_and_engine(variant, dry_run)
     if not _execute(engine, ctx, operation).ok:
         raise typer.Exit(code=1)
 
@@ -137,9 +144,9 @@ def integration_test(variant: str = VariantOption) -> None:
 
 
 @app.command()
-def push(variant: str = VariantOption) -> None:
+def push(variant: str = VariantOption, dry_run: bool = DryRunOption) -> None:
     """Push the tested artifact to the registry."""
-    _run("push", variant)
+    _run("push", variant, dry_run)
 
 
 @app.command()
@@ -164,6 +171,7 @@ def ci(
     soft: bool = typer.Option(
         False, "--soft", help="Exit 0 even if an operation failed."
     ),
+    dry_run: bool = DryRunOption,
 ) -> None:
     """Run the engine's whole pipeline, then report — the one command a CI job needs.
 
@@ -171,7 +179,7 @@ def ci(
     problem. The artifact chain still blocks: `integration-test` and `push` report `blocked`
     when a prerequisite failed. Exits non-zero if anything failed.
     """
-    ctx, engine = _context_and_engine(variant)
+    ctx, engine = _context_and_engine(variant, dry_run)
     report_mod.clear_fragments(ctx.report_dir)
     for operation in engine.order:
         for label in _labels(engine, ctx, operation):

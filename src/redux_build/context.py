@@ -11,15 +11,21 @@ class RunContext:
     is_github: bool
     variant: str = ""
     env: dict[str, str] = field(default_factory=dict)
+    # Rehearse `push` without touching the registry: the CI and branch gates are bypassed so a
+    # feature branch can exercise login + tag end to end, and the `docker push` itself is skipped.
+    dry_run: bool = False
 
     @classmethod
-    def detect(cls, cwd: Path | None = None, variant: str = "") -> RunContext:
+    def detect(
+        cls, cwd: Path | None = None, variant: str = "", dry_run: bool = False
+    ) -> RunContext:
         env = dict(os.environ)
         return cls(
             cwd=cwd or Path.cwd(),
             is_github=env.get("GITHUB_ACTIONS") == "true",
             variant=variant,
             env=env,
+            dry_run=dry_run,
         )
 
     @property

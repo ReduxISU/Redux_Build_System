@@ -133,6 +133,11 @@ One workflow serves every engine: it runs `rbs ci` inside the repo's own devcont
 devcontainer (step 0) is what declares the toolchain. Pass `with: { soft: true }` to report without
 failing while rbs runs alongside legacy CI.
 
+Pass `with: { dry-run: true }` to rehearse `push` before trusting it: the CI and branch gates are
+bypassed, so a pull request or feature branch logs in to the registry and tags the image exactly as
+a release would, then stops short of `docker push`. The report shows
+`⚠️ push — dry run — logged in, would push …`. Drop the flag once you have seen that row.
+
 ## 3. Try it locally first
 
 ```bash

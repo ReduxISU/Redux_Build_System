@@ -120,6 +120,33 @@ def test_reports_the_digest(tmp_path, monkeypatch):
     assert fragment.metrics == {"digest": DIGEST}
 
 
+def test_dry_run_tags_but_never_pushes(tmp_path, monkeypatch):
+    seen = []
+    _wire(monkeypatch, seen)
+    # Off-branch and outside CI: a dry run is precisely for rehearsing from such places.
+    ctx = RunContext(
+        cwd=tmp_path,
+        is_github=False,
+        env={**CI_ENV, "GITHUB_REF_NAME": "feature/18"},
+        dry_run=True,
+    )
+    fragment = UvEngine(CONFIG).push(ctx)
+
+    assert [cmd[1] for cmd in _argv(seen)] == ["login", "tag", "tag"]
+    assert fragment.status == Status.warning
+    assert fragment.summary == (
+        "dry run — logged in, would push `ghcr.io/reduxisu/quantumsolver:0123456`, `:latest`"
+    )
+    assert fragment.metrics == {}
+
+
+def test_dry_run_still_needs_credentials(tmp_path):
+    ctx = RunContext(cwd=tmp_path, is_github=False, env={}, dry_run=True)
+    fragment = UvEngine(CONFIG).push(ctx)
+    assert fragment.status == Status.failure
+    assert fragment.summary == "missing GITHUB_TOKEN, GITHUB_SHA"
+
+
 def test_login_failure_pushes_nothing(tmp_path, monkeypatch):
     seen = []
     _wire(monkeypatch, seen, login_rc=1)

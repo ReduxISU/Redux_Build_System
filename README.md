@@ -254,6 +254,7 @@ Useful flags and variables:
 | `--variant <label>` | Tags the fragment (e.g. `py3.12`) so matrix runs don't overwrite each other |
 | `report --post` | Upsert the report as a sticky PR comment (CI only; no-op without a token) |
 | `report --soft` | Render the report but exit 0 even if an operation failed |
+| `push --dry-run` / `ci --dry-run` | Rehearse `push` from any branch or laptop: log in and tag, never push |
 | `RBS_REPORT_DIR` | Where fragments are written (default `./.rbs/report`) |
 
 ---
@@ -412,6 +413,7 @@ jobs:
     uses: ReduxISU/Redux_Build_System/.github/workflows/ci.yml@main
     secrets: inherit
     # with: { soft: true }          # report without failing, while trialling rbs beside legacy CI
+    # with: { dry-run: true }       # rehearse `push` on any branch: login + tag, never push
 ```
 
 The hub's `ci.yml` is engine-agnostic. It checks the repo out and runs **`rbs ci --post` inside the

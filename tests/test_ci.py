@@ -122,6 +122,34 @@ def test_ci_publishes_on_the_release_branch(tmp_path, monkeypatch):
     assert _statuses(tmp_path)["push"] == Status.success
 
 
+def test_ci_dry_run_rehearses_push_on_a_pull_request(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    (repo / "rbs.toml").write_text(
+        'engine = "uv"\npackage = "demo"\n'
+        '[artifact]\nimage = "ghcr.io/x/demo"\n'
+        '[push]\non-branch = "main"\n'
+    )
+    for key, value in {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_REF_NAME": "18/merge",
+        "GITHUB_SHA": "0123456789abcdef",
+        "GITHUB_TOKEN": "tok",
+    }.items():
+        monkeypatch.setenv(key, value)
+    seen = []
+
+    def _run(cmd, *_args, **_kwargs):
+        seen.append(cmd)
+        return CmdResult(rc=0, out="ok", duration_s=0.1)
+
+    monkeypatch.setattr(basemod, "run", _run)
+    monkeypatch.setattr(dockermod, "run", _run)
+    result = _invoke(repo, monkeypatch, "ci", "--dry-run")
+    assert result.exit_code == 0
+    assert _statuses(tmp_path)["push"] == Status.warning
+    assert not any(cmd[:2] == ["docker", "push"] for cmd in seen)
+
+
 def test_ci_reports_config_error_as_exit_2(tmp_path, monkeypatch):
     result = _invoke(tmp_path, monkeypatch, "ci")  # no rbs.toml
     assert result.exit_code == 2
