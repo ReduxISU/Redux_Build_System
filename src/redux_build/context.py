@@ -33,6 +33,20 @@ class RunContext:
         return Path(value) if value else None
 
     @property
+    def sha(self) -> str:
+        return self.env.get("GITHUB_SHA", "")
+
+    @property
+    def ref_name(self) -> str:
+        """Branch (or `NN/merge` on a pull request) — how `push` knows it is on the release branch."""
+        return self.env.get("GITHUB_REF_NAME", "")
+
+    @property
+    def actor(self) -> str:
+        # GHCR authenticates on the token alone, so the username only needs to be non-empty.
+        return self.env.get("GITHUB_ACTOR") or "github-actions"
+
+    @property
     def report_dir(self) -> Path:
         value = self.env.get("RBS_REPORT_DIR")
         return Path(value) if value else self.cwd / ".rbs" / "report"

@@ -11,6 +11,11 @@ engine does not support is left to the base default, which returns `status = ski
 
 `order` is the toolchain's default `ci` sequence — the operations `rbs ci` runs, in order.
 
+The container operations (`build`, `integration-test`, `push`) are implemented once on the base
+`Engine` and inherited: they act on the Dockerfile and `rbs.toml`, never on the toolchain. `push`
+is the only operation that reads GitHub context (`is_github`, `ref_name`, `sha`, `actor` on
+`RunContext`) — it must skip, not fail, outside CI or off the release branch.
+
 ## Fanning an operation out
 
 `variants(operation) -> list[str]` returns the labels an operation should be repeated over; empty
@@ -29,7 +34,7 @@ Every operation returns a `Fragment` (`models.py`), the unit the reporter aggreg
 |---|---|
 | `engine` | e.g. `uv` |
 | `operation` | e.g. `lint` |
-| `status` | `success` / `failure` / `skipped` / `warning` |
+| `status` | `success` / `failure` / `skipped` / `warning` / `blocked` (a prerequisite failed, so it never ran) |
 | `summary` | one-line human summary |
 | `variant` | matrix label, e.g. `py3.12` |
 | `metrics` | optional machine-readable numbers |

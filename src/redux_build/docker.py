@@ -4,7 +4,7 @@ import socket
 from pathlib import Path
 
 from redux_build.context import RunContext
-from redux_build.runner import run
+from redux_build.runner import CmdResult, run
 
 # Stamped on every container and network rbs creates, so an interrupted run can always be swept:
 #   docker ps -aq --filter label=rbs.run | xargs -r docker rm -f
@@ -28,6 +28,20 @@ def artifact_name(config: dict) -> str:
 
 def _basename(image: str | None) -> str | None:
     return image.rsplit("/", 1)[-1].split(":")[0] if image else None
+
+
+def registry(image: str) -> str:
+    """Host part of an image reference, or "" for a Docker Hub short name (`owner/name`)."""
+    host = image.split("/", 1)[0]
+    return host if "." in host or ":" in host else ""
+
+
+def login(ctx: RunContext, host: str, user: str, token: str) -> CmdResult:
+    """Authenticate the docker CLI. The token travels over stdin, never argv, and the output is
+    returned rather than printed so the credential warning docker emits stays out of the report.
+    """
+    cmd = ["docker", "login", *([host] if host else []), "-u", user, "--password-stdin"]
+    return run(cmd, ctx.cwd, input=token)
 
 
 def image_size(ctx: RunContext, tag: str) -> str:

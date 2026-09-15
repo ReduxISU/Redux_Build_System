@@ -24,11 +24,15 @@ def run(
     env: dict[str, str] | None = None,
     shell: bool = False,
     merge_stderr: bool = True,
+    input: str | None = None,
 ) -> CmdResult:
     """Run `cmd`, capturing rc, output and wall time.
 
     `merge_stderr=False` keeps stderr out of `out` — required when parsing a tool's JSON, since
     several (biome, npm) print notices to stderr that would otherwise corrupt the document.
+
+    `input` is fed to stdin — how a secret reaches `docker login --password-stdin` without ever
+    appearing in argv or a process listing.
     """
     start = time.monotonic()
     try:
@@ -37,6 +41,7 @@ def run(
             cwd=cwd,
             env=env,
             shell=shell,
+            input=input,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,

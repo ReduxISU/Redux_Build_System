@@ -48,10 +48,10 @@ port = 27100
 health-path = "/health"
 
 [integration]
-command = "uv run pytest tests/integration -v"
+command = "uv run pytest integration -v"
 
 [push]
-on-branch = "main"
+on-branch = "main"                  # the only branch `push` publishes from, and only in CI
 ```
 
 ### `[integration]` in full
@@ -98,28 +98,40 @@ If a service never becomes ready, the operation fails with that container's last
 as findings — and it fails immediately if the container has already exited, rather than waiting out
 the timeout.
 
+### `[push]`
+
+`push` retags the image `integration-test` just passed as `<image>:<sha7>` and `<image>:latest`
+and pushes both to the registry in `[artifact] image`, logging in with `GITHUB_TOKEN`. It runs
+**only under GitHub Actions and only when the branch equals `on-branch`**; on a pull request, on a
+laptop, or without a `[push]` block it reports `skipped` with the reason, never a failure. The
+caller workflow needs `packages: write`, and the package must already be linked to the repo (or be
+created by this repo's workflow) for `GITHUB_TOKEN` to be allowed to push.
+
 ## 2. A thin caller workflow
 
-`.github/workflows/ci.yml`:
+`.github/workflows/rbs.yml`:
 
 ```yaml
+name: rbs
 on:
-  pull_request: { branches: [main] }
-  push: { branches: [main] }
+  pull_request:
+  push: { branches: [main] }        # match [push] on-branch
 permissions:
   contents: read
   packages: write
   pull-requests: write
 concurrency:
-  group: ci-${{ github.ref }}
+  group: rbs-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  ci:
-    uses: ReduxISU/Redux_Build_System/.github/workflows/ci-uv.yml@v1
+  build-test:
+    uses: ReduxISU/Redux_Build_System/.github/workflows/ci.yml@main
     secrets: inherit
 ```
 
-Pick the reusable workflow that matches the engine (`ci-uv.yml`, `ci-dotnet.yml`, `ci-npm.yml`).
+One workflow serves every engine: it runs `rbs ci` inside the repo's own devcontainer, so the
+devcontainer (step 0) is what declares the toolchain. Pass `with: { soft: true }` to report without
+failing while rbs runs alongside legacy CI.
 
 ## 3. Try it locally first
 

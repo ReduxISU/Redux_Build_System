@@ -2,6 +2,7 @@ import json
 
 from typer.testing import CliRunner
 
+from redux_build import docker as dockermod
 from redux_build.cli import app
 from redux_build.engines import base as basemod
 from redux_build.models import Status
@@ -98,6 +99,27 @@ def test_ci_clears_fragments_from_a_previous_run(tmp_path, monkeypatch):
     monkeypatch.setattr(basemod, "run", _fixed(0, "ok"))
     _invoke(repo, monkeypatch, "ci", "--soft")
     assert _statuses(tmp_path)["lint"] == Status.success
+
+
+def test_ci_publishes_on_the_release_branch(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    (repo / "rbs.toml").write_text(
+        'engine = "uv"\npackage = "demo"\n'
+        '[artifact]\nimage = "ghcr.io/x/demo"\n'
+        '[push]\non-branch = "main"\n'
+    )
+    for key, value in {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_REF_NAME": "main",
+        "GITHUB_SHA": "0123456789abcdef",
+        "GITHUB_TOKEN": "tok",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(basemod, "run", _fixed(0, "ok"))
+    monkeypatch.setattr(dockermod, "run", _fixed(0, "ok"))
+    result = _invoke(repo, monkeypatch, "ci")
+    assert result.exit_code == 0
+    assert _statuses(tmp_path)["push"] == Status.success
 
 
 def test_ci_reports_config_error_as_exit_2(tmp_path, monkeypatch):

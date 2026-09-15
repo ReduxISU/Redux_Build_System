@@ -177,19 +177,10 @@ build ──✅/❌──▶ integration-test ──✅/❌──▶ push       
 
 Crucially **that policy lives here, not in workflow YAML.** `rbs integration-test` reads the
 fragments already on disk and short-circuits itself, so it behaves identically on your laptop and in
-CI. Workflow steps therefore carry a uniform, policy-free `continue-on-error: true`, and
-**`rbs report` is the single gate** that fails the build:
+CI. `rbs ci` runs every operation regardless of earlier failures and exits non-zero once, after the
+report — so the workflow is a single step with no `if:` or `continue-on-error` anywhere.
 
-```yaml
-- run: rbs audit
-  continue-on-error: true      # identical on every operation step — no policy in YAML
-- run: rbs lint
-  continue-on-error: true
-…
-- run: rbs report --post       # the only step that can fail the job
-```
-
-For branch protection / rulesets this means you require **one** status check — the report job —
+For branch protection / rulesets this means you require **one** status check — the `rbs ci` job —
 rather than one per operation. It cannot go stale as operations are added.
 
 ### Test matrices run inside one container
@@ -286,10 +277,15 @@ context = "."                              # optional, default "."
 
 **Consumed today:** `engine`, `package`, `unit-test.{coverage-min,python-versions}`,
 `artifact.{image,name,dockerfile,context,port,health-path}`,
-`integration.{command,timeout,env,services}`.
-Keys for `[push]` are defined in [`docs/onboarding.md`](docs/onboarding.md) and are inert until that
-operation lands. The full `[integration]` schema — dependency services, their environment, and the
-`RBS_BASE_URL` / `RBS_URL_<SERVICE>` variables handed to the suite — is documented there too.
+`integration.{command,timeout,env,services}`, `push.on-branch`.
+The full `[integration]` schema — dependency services, their environment, and the
+`RBS_BASE_URL` / `RBS_URL_<SERVICE>` variables handed to the suite — is documented in
+[`docs/onboarding.md`](docs/onboarding.md).
+
+`push` runs only under GitHub Actions and only when `GITHUB_REF_NAME` equals `on-branch`; anywhere
+else it reports `skipped` with the reason. It logs in to the registry named by `artifact.image` with
+`GITHUB_TOKEN`, then pushes `<image>:<sha7>` and `<image>:latest`, both retagged from the exact
+`local/<name>:ci` image that `integration-test` ran against.
 
 `build` derives `local/<name>:ci` from `artifact.name`, else the last path segment of
 `artifact.image`, else `package`.
@@ -393,62 +389,40 @@ repo adding a docker feature on a trixie-based image needs the same setting.
 
 ## How it works in a GitHub Action
 
-> **Status: not yet implemented.** The reusable workflows described here are the next milestone.
-> Everything above this section works today.
-
-A consumer repo will carry two files and no pipeline logic:
-
-**`rbs.toml`** (above) and **`.github/workflows/ci.yml`**:
+A consumer repo carries two files and no pipeline logic: **`rbs.toml`** (above) and a thin
+**`.github/workflows/rbs.yml`** that calls the hub's one reusable workflow:
 
 ```yaml
-name: CI
+name: rbs
 on:
-  pull_request: { branches: [main] }
-  push: { branches: [main] }
+  pull_request:
+  push: { branches: [main] }        # the same branch as `[push] on-branch`
 
 permissions:
   contents: read          # checkout
-  packages: write         # push → GHCR
+  packages: write         # `push` → GHCR
   pull-requests: write    # sticky report comment
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: rbs-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  ci:
-    uses: ReduxISU/Redux_Build_System/.github/workflows/ci-uv.yml@v1
+  build-test:
+    uses: ReduxISU/Redux_Build_System/.github/workflows/ci.yml@main
     secrets: inherit
+    # with: { soft: true }          # report without failing, while trialling rbs beside legacy CI
 ```
 
-The hub's reusable workflow installs `rbs` and calls one operation per step:
+The hub's `ci.yml` is engine-agnostic. It checks the repo out and runs **`rbs ci --post` inside the
+caller's own devcontainer** (`devcontainers/ci`), so the toolchain is declared once in
+`devcontainer.json` and used by humans and CI alike — rbs arrives there as the
+`ghcr.io/reduxisu/features/rbs` feature. One job, one step; the fragments and `report.md` are
+uploaded as an artifact and the table is appended to the job summary.
 
-```yaml
-jobs:
-  quality:                     # matrix: 3.12 / 3.13
-    steps:
-      - uses: ./.github/actions/setup-rbs
-      - { run: rbs audit,        continue-on-error: true }
-      - { run: rbs format-check, continue-on-error: true }
-      - { run: rbs lint,         continue-on-error: true }
-      - { run: "rbs unit-test --variant py${{ matrix.python }}", continue-on-error: true }
-      - uses: actions/upload-artifact@v4      # report-quality-<ver>
-
-  build-test:                  # needs: quality
-    steps:                     # rbs itself blocks the chain — see "Failure policy"
-      - { run: rbs build,            continue-on-error: true }   # local image, not pushed
-      - { run: rbs integration-test, continue-on-error: true }   # ⛔ if build failed
-      - { run: rbs push,             continue-on-error: true }   # ⛔ unless both passed
-      - uses: actions/upload-artifact@v4
-
-  report:                      # needs: [quality, build-test], if: always()
-    steps:
-      - uses: actions/download-artifact@v4    # pattern: report-*, merge-multiple
-      - run: rbs report --post                # sticky PR comment + job summary; THE gate
-```
-
-`if: always()` on the report job is required — without it a failed upstream job would skip the
-report and you would lose the very summary explaining what broke.
+Because the runner's environment is not visible inside the container, the workflow forwards what
+rbs needs explicitly: `GITHUB_TOKEN` (comment + registry login), `GITHUB_REPOSITORY`, `GITHUB_SHA`
+(the image tag), `GITHUB_REF_NAME` (the `push` branch gate), `GITHUB_ACTOR`, and the PR number.
 
 Why permissions are declared in the **caller**: a reusable workflow can only narrow `GITHUB_TOKEN`
 scope, never widen it. Fork PRs get a read-only token and no secrets — push and comment are skipped
@@ -529,7 +503,7 @@ fragment JSON.
 | `integration-test` — ephemeral stack around the built image | ✅ implemented |
 | `rbs ci` — run the engine's full ordered pipeline | ✅ implemented |
 | Reusable workflow (`ci.yml`, runs in the caller's devcontainer) | ✅ implemented |
-| `push` | ⬜ next |
+| `push` — retag the tested image and push to GHCR, only on `[push] on-branch` in CI | ✅ implemented |
 | `deploy` — pull-based compose deploy | ⬜ planned |
 
 Unimplemented operations report `skipped`, never a false pass.

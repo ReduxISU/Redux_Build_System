@@ -6,7 +6,7 @@ from redux_build import docker, stack
 from redux_build.context import RunContext
 from redux_build.models import Finding, Fragment, Status
 from redux_build.runner import CmdResult, run
-from redux_build.text import test_counts
+from redux_build.text import search, test_counts
 
 
 class Engine:
@@ -147,7 +147,65 @@ class Engine:
         )
 
     def push(self, ctx: RunContext) -> Fragment:
-        return self.skipped("push", "not implemented", ctx)
+        """Retag the image `integration-test` just passed and push it to the registry.
+
+        Only from CI, and only on the configured branch: a laptop must never be able to put an
+        untested image where prod pulls from. Anywhere else this reports `skipped`, so a PR's
+        report still shows the row and why it did not run.
+        """
+        image = self.config.get("artifact", {}).get("image")
+        branch = self.config.get("push", {}).get("on-branch")
+        if not (image and branch):
+            return self.skipped("push", "no [push] block", ctx)
+        if not ctx.is_github:
+            return self.skipped("push", "only in CI", ctx)
+        if ctx.ref_name != branch:
+            return self.skipped("push", f"only on push to `{branch}`", ctx)
+        missing = [
+            name for name in ("GITHUB_TOKEN", "GITHUB_SHA") if not ctx.env.get(name)
+        ]
+        if missing:
+            return self._fragment(
+                "push",
+                ctx,
+                CmdResult(rc=1, out="", duration_s=0.0),
+                f"missing {', '.join(missing)}",
+            )
+        return self._publish(ctx, image)
+
+    def _publish(self, ctx: RunContext, image: str) -> Fragment:
+        host = docker.registry(image)
+        login = docker.login(ctx, host, ctx.actor, ctx.env["GITHUB_TOKEN"])
+        if not login.ok:
+            return self._fragment(
+                "push", ctx, login, f"login to {host or 'docker.io'} failed"
+            )
+        refs = [f"{image}:{ctx.sha[:7]}", f"{image}:latest"]
+        result = self._ship(ctx, docker.local_tag(self.config), refs)
+        result.duration_s = round(result.duration_s + login.duration_s, 2)
+        if not result.ok:
+            return self._fragment("push", ctx, result, "docker push failed")
+        digest = search(r"sha256:[0-9a-f]{64}", result.out, "")
+        summary = f"pushed `{refs[0]}`, `:latest`"
+        return self._fragment(
+            "push", ctx, result, summary, metrics={"digest": digest} if digest else {}
+        )
+
+    def _ship(self, ctx: RunContext, source: str, refs: list[str]) -> CmdResult:
+        """Tag and push each ref in turn, stopping at the first failure. The sha tag goes first so a
+        failed `latest` still leaves an addressable image behind."""
+        total = CmdResult(rc=0, out="", duration_s=0.0)
+        for ref in refs:
+            for step in (["docker", "tag", source, ref], ["docker", "push", ref]):
+                result = self._exec(step, ctx)
+                total = CmdResult(
+                    rc=result.rc,
+                    out=total.out + result.out,
+                    duration_s=round(total.duration_s + result.duration_s, 2),
+                )
+                if not result.ok:
+                    return total
+        return total
 
     def run_operation(self, operation: str, ctx: RunContext) -> Fragment:
         return getattr(self, operation.replace("-", "_"))(ctx)

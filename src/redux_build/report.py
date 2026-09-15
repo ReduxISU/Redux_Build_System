@@ -241,7 +241,7 @@ def _subtitle(fragments: list[Fragment], ctx: RunContext | None) -> str:
     parts = []
     if engines:
         parts.append("`" + "`, `".join(engines) + "`")
-    sha = ctx.env.get("GITHUB_SHA") if ctx else None
+    sha = ctx.sha if ctx else ""
     if sha:
         parts.append(f"commit `{sha[:7]}`")
     return " · ".join(parts)
