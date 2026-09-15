@@ -72,9 +72,9 @@ class Engine:
         if not dockerfile.is_file():
             return self.skipped("build", f"no {dockerfile.name}", ctx)
         tag = docker.local_tag(self.config)
+        # No `type=gha` cache: under devcontainers/ci the default buildx driver cannot export
+        # cache and the runner's ACTIONS_* env is not forwarded, so the flags fail the build.
         cmd = ["docker", "buildx", "build", "--load", "-f", str(dockerfile), "-t", tag]
-        if ctx.is_github:
-            cmd += ["--cache-from", "type=gha", "--cache-to", "type=gha,mode=max"]
         cmd.append(artifact.get("context", "."))
         result = self._exec(cmd, ctx)
         if not result.ok:

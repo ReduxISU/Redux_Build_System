@@ -42,6 +42,24 @@ def test_build_success_reports_tag_and_size(tmp_path, monkeypatch):
     assert "12 MB" in frag.summary
 
 
+def test_build_in_ci_uses_no_gha_cache(tmp_path, monkeypatch):
+    # devcontainers/ci runs the default buildx driver with no ACTIONS_* env, where
+    # `type=gha` is a hard error before the build even starts.
+    (tmp_path / "Dockerfile").write_text("FROM alpine\n")
+    seen = []
+
+    def _run(cmd, *_args, **_kwargs):
+        seen.append(cmd)
+        return CmdResult(rc=0, out="", duration_s=0.1)
+
+    monkeypatch.setattr(basemod, "run", _run)
+    monkeypatch.setattr(docker, "image_size", lambda ctx, tag: "")
+    ctx = RunContext(cwd=tmp_path, is_github=True, env={})
+    UvEngine({"package": "demo"}).build(ctx)
+    assert seen[0][:4] == ["docker", "buildx", "build", "--load"]
+    assert not any("type=gha" in arg for arg in seen[0])
+
+
 def test_build_failure(tmp_path, monkeypatch):
     (tmp_path / "Dockerfile").write_text("FROM alpine\n")
     monkeypatch.setattr(basemod, "run", _fixed(1, "error"))
