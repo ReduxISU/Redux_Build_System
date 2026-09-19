@@ -103,7 +103,9 @@ the timeout.
 `push` retags the image `integration-test` just passed as `<image>:<sha7>` and `<image>:latest`
 and pushes both to the registry in `[artifact] image`, logging in with `GITHUB_TOKEN`. It runs
 **only under GitHub Actions and only when the branch equals `on-branch`**; on a pull request, on a
-laptop, or without a `[push]` block it reports `skipped` with the reason, never a failure. The
+laptop, or without a `[push]` block it reports `skipped` with the reason, never a failure. It
+also reports `blocked` unless **every** earlier operation passed — quality gates included, so a
+red `lint` or a coverage shortfall stops the publish even when the image itself is fine. The
 caller workflow needs `packages: write`, and the package must already be linked to the repo (or be
 created by this repo's workflow) for `GITHUB_TOKEN` to be allowed to push.
 

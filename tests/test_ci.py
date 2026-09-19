@@ -122,6 +122,38 @@ def test_ci_publishes_on_the_release_branch(tmp_path, monkeypatch):
     assert _statuses(tmp_path)["push"] == Status.success
 
 
+def test_ci_never_publishes_past_a_red_quality_gate(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    (repo / "rbs.toml").write_text(
+        'engine = "uv"\npackage = "demo"\n'
+        '[artifact]\nimage = "ghcr.io/x/demo"\n'
+        '[push]\non-branch = "main"\n'
+    )
+    for key, value in {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_REF_NAME": "main",
+        "GITHUB_SHA": "0123456789abcdef",
+        "GITHUB_TOKEN": "tok",
+    }.items():
+        monkeypatch.setenv(key, value)
+    seen = []
+
+    def _run(cmd, *_args, **_kwargs):
+        seen.append(cmd)
+        return CmdResult(rc=1 if "ruff" in cmd else 0, out="ok", duration_s=0.1)
+
+    monkeypatch.setattr(basemod, "run", _run)
+    monkeypatch.setattr(dockermod, "run", _run)
+    result = _invoke(repo, monkeypatch, "ci", "--soft")
+    statuses = _statuses(tmp_path)
+    assert result.exit_code == 0
+    assert statuses["lint"] == Status.failure
+    assert statuses["build"] == Status.success
+    # The image built and would have passed the artifact chain — and still must not ship.
+    assert statuses["push"] == Status.blocked
+    assert not any(cmd[:2] in (["docker", "login"], ["docker", "push"]) for cmd in seen)
+
+
 def test_ci_dry_run_rehearses_push_on_a_pull_request(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     (repo / "rbs.toml").write_text(

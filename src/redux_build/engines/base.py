@@ -21,12 +21,22 @@ class Engine:
     order: list[str] = []
 
     # Operations that cannot run unless their prerequisites succeeded — you cannot test an
-    # artifact that failed to build, or push one that failed its tests. Quality gates
-    # (audit/format-check/lint/typecheck/unit-test) deliberately have no prerequisites: they always
-    # run so one CI pass reports every problem at once.
+    # artifact that failed to build. Quality gates (audit/format-check/lint/typecheck/unit-test)
+    # deliberately have no prerequisites: they always run so one CI pass reports every problem.
+    #
+    # `push` is the exception that requires *everything*: an image in the registry has to mean
+    # every gate passed, not merely that it built. A `skipped` gate does not block.
     requires: dict[str, list[str]] = {
         "integration-test": ["build"],
-        "push": ["build", "integration-test"],
+        "push": [
+            "audit",
+            "format-check",
+            "lint",
+            "typecheck",
+            "unit-test",
+            "build",
+            "integration-test",
+        ],
     }
 
     def __init__(self, config: dict):

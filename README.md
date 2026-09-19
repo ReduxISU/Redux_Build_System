@@ -163,16 +163,22 @@ prerequisites**. A lint
 failure never stops the audit from running. Every one of them reports, every run.
 
 **The artifact chain** is a real data dependency, so it is enforced: you cannot integration-test an
-image that failed to build, or push one that failed its tests. Those operations declare
-prerequisites (`Engine.requires`), and when one is unmet the operation reports **`blocked`** —
-"a required upstream operation failed, so this never ran" — instead of running and failing for the
-wrong reason, or reporting a misleading `skipped`.
+image that failed to build. Those operations declare prerequisites (`Engine.requires`), and when
+one is unmet the operation reports **`blocked`** — "a required upstream operation failed, so this
+never ran" — instead of running and failing for the wrong reason, or reporting a misleading
+`skipped`.
+
+**`push` requires everything.** It is the one operation with an effect outside the run, so it is
+gated on every operation before it, quality gates included: a red `lint` or a coverage shortfall
+blocks the publish even though the image built and its integration tests passed. An image in the
+registry therefore means *every* gate was green. A `skipped` gate (no `tsconfig.json`, no
+`[integration]` block) does not block; a failure in any one variant of a fanned-out operation does.
 
 ```
 audit ─┐
-lint  ─┼─ all always run, independently
-…     ─┘
-build ──✅/❌──▶ integration-test ──✅/❌──▶ push       ❌ upstream ⇒ ⛔ blocked downstream
+lint  ─┼─ all always run, independently ───────────────┐
+…     ─┘                                                ▼
+build ──✅/❌──▶ integration-test ──✅/❌──────────────▶ push    any ❌ upstream ⇒ ⛔ blocked
 ```
 
 Crucially **that policy lives here, not in workflow YAML.** `rbs integration-test` reads the

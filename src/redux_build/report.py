@@ -79,9 +79,11 @@ def find_blocker(report_dir: Path, required: list[str]) -> str | None:
     """
     if not required:
         return None
-    by_operation = {f.operation: f.status for f in load_fragments(report_dir)}
+    # A set, not a dict keyed on operation: a fanned-out operation writes one fragment per
+    # variant, and a failing 3.12 leg must block even when the 3.13 leg beside it passed.
     blocking = (Status.failure, Status.blocked)
-    return next((name for name in required if by_operation.get(name) in blocking), None)
+    failed = {f.operation for f in load_fragments(report_dir) if f.status in blocking}
+    return next((name for name in required if name in failed), None)
 
 
 def summary_line(fragment: Fragment) -> str:
