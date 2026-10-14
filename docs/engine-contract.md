@@ -13,8 +13,9 @@ engine does not support is left to the base default, which returns `status = ski
 
 The container operations (`build`, `integration-test`, `push`) are implemented once on the base
 `Engine` and inherited: they act on the Dockerfile and `rbs.toml`, never on the toolchain. `push`
-is the only operation that reads GitHub context (`is_github`, `ref_name`, `sha`, `actor` on
-`RunContext`) — it must skip, not fail, outside CI or off the release branch.
+and `build` are the only operations that read GitHub context (`is_github`, `ref_name`, `sha`,
+`actor` on `RunContext`): `push` must skip, not fail, outside CI or off the release branch, and
+`build` runs `[build] pre-command` only in CI unless `pre-command-local` opts in.
 
 ## Fanning an operation out
 

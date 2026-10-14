@@ -54,6 +54,30 @@ command = "uv run pytest integration -v"
 on-branch = "main"                  # the only branch `push` publishes from, and only in CI
 ```
 
+### `[build]`
+
+`pre-command` is a shell command run in the repo root right before `docker build`, for inputs that
+only exist at build time — stamping counts fetched from the GitHub API into a file the Dockerfile
+copies, say. The reusable workflow runs the build, so this is the one place a caller can add a step
+ahead of it.
+
+```toml
+[build]
+pre-command = "dotnet run --configuration Release --project Tools/ContributorStatsSync -- --counts-only"
+pre-command-local = false           # default; true also runs it on a laptop / local devcontainer
+```
+
+- **It runs only in CI by default.** Such a hook typically rewrites tracked files, and doing that on
+  a developer's machine leaves a dirty tree one `git add` away from being committed. Outside CI the
+  build goes ahead without it and the summary says `pre-command skipped outside CI`; set
+  `pre-command-local = true` to run it there too.
+- **It sees the same environment as the rest of the run**, so `GITHUB_TOKEN` (and the other
+  variables the workflow forwards) is available to it.
+- **A non-zero exit fails `build`** with `pre-command failed` and no image is built — so
+  `integration-test` and `push` are blocked too. rbs stays strict; if the step is best-effort for
+  your repo, make it non-fatal in the command itself, e.g.
+  `pre-command = "./stamp.sh || git checkout -- wwwroot/info.json"`.
+
 ### `[integration]` in full
 
 `integration-test` starts the image `build` just produced on a throwaway network, waits for it to
