@@ -81,17 +81,47 @@ class Engine:
         dockerfile = ctx.cwd / artifact.get("dockerfile", "Dockerfile")
         if not dockerfile.is_file():
             return self.skipped("build", f"no {dockerfile.name}", ctx)
+        hook, note = self._pre_build(ctx)
+        # An optional hook's failure builds anyway but marks the row, so a best-effort step that
+        # failed (counts left at zero, say) is still visible in the report.
+        optional = self.config.get("build", {}).get("pre-command-optional", False)
+        hook_failed = bool(hook) and not hook.ok
+        if hook_failed and not optional:
+            return self._fragment("build", ctx, hook, "pre-command failed")
+        if hook_failed:
+            note = " · pre-command failed, built without it"
         tag = docker.local_tag(self.config)
         # No `type=gha` cache: under devcontainers/ci the default buildx driver cannot export
         # cache and the runner's ACTIONS_* env is not forwarded, so the flags fail the build.
         cmd = ["docker", "buildx", "build", "--load", "-f", str(dockerfile), "-t", tag]
         cmd.append(artifact.get("context", "."))
         result = self._exec(cmd, ctx)
+        if hook:
+            result.duration_s = round(result.duration_s + hook.duration_s, 2)
         if not result.ok:
             return self._fragment("build", ctx, result, "docker build failed")
         size = docker.image_size(ctx, tag)
-        summary = f"built `{tag}`" + (f" · {size}" if size else "")
-        return self._fragment("build", ctx, result, summary)
+        summary = f"built `{tag}`" + (f" · {size}" if size else "") + note
+        status = Status.warning if hook_failed else None
+        return self._fragment("build", ctx, result, summary, status=status)
+
+    def _pre_build(self, ctx: RunContext) -> tuple[CmdResult | None, str]:
+        """Run `[build] pre-command` ahead of `docker build`; returns its result (None when it did
+        not run) and a note for the summary.
+
+        It exists to stamp build-time data (e.g. counts fetched with GITHUB_TOKEN) into files the
+        image copies — a step a caller cannot otherwise inject, since the reusable workflow runs
+        the build. It runs only in CI unless `pre-command-local` opts in: such a hook typically
+        rewrites tracked files, and doing that on a laptop leaves a dirty tree one commit away
+        from being checked in.
+        """
+        build = self.config.get("build", {})
+        command = build.get("pre-command")
+        if not command:
+            return None, ""
+        if not (ctx.is_github or build.get("pre-command-local", False)):
+            return None, " · pre-command skipped outside CI"
+        return self._exec(command, ctx, env=ctx.env, shell=True), " · ran pre-command"
 
     def integration_test(self, ctx: RunContext) -> Fragment:
         """Run the repo's integration suite against the image `build` just produced.
@@ -238,8 +268,9 @@ class Engine:
         """Run a tool. `echo=False` for JSON invocations — the reporter prints the parsed
         findings instead, so logs stay readable rather than dumping a raw document.
 
-        `env`/`shell` serve `integration-test`, whose command comes from rbs.toml as a string and
-        needs the stack's addresses in its environment."""
+        `env`/`shell` serve the commands that come from rbs.toml as a string: `integration-test`'s,
+        which needs the stack's addresses in its environment, and `[build] pre-command`.
+        """
         result = run(cmd, ctx.cwd, env=env, shell=shell, merge_stderr=merge_stderr)
         if echo and result.out.strip():
             print(result.out.rstrip("\n"))

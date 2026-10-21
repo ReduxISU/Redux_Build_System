@@ -283,7 +283,7 @@ context = "."                              # optional, default "."
 ```
 
 **Consumed today:** `engine`, `package`, `unit-test.{coverage-min,python-versions}`,
-`artifact.{image,name,dockerfile,context,port,health-path}`,
+`artifact.{image,name,dockerfile,context,port,health-path}`, `build.{pre-command,pre-command-local,pre-command-optional}`,
 `integration.{command,timeout,env,services}`, `push.on-branch`.
 The full `[integration]` schema — dependency services, their environment, and the
 `RBS_BASE_URL` / `RBS_URL_<SERVICE>` variables handed to the suite — is documented in
@@ -296,6 +296,11 @@ else it reports `skipped` with the reason. It logs in to the registry named by `
 
 `build` derives `local/<name>:ci` from `artifact.name`, else the last path segment of
 `artifact.image`, else `package`.
+
+`build.pre-command` is a shell command run right before `docker build` (only in CI unless
+`build.pre-command-local = true`); a non-zero exit fails `build`, unless
+`build.pre-command-optional = true`, which builds anyway and marks the row ⚠️. See
+[`docs/onboarding.md`](docs/onboarding.md#build).
 
 ---
 
