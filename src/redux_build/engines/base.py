@@ -82,8 +82,14 @@ class Engine:
         if not dockerfile.is_file():
             return self.skipped("build", f"no {dockerfile.name}", ctx)
         hook, note = self._pre_build(ctx)
-        if hook and not hook.ok:
+        # An optional hook's failure builds anyway but marks the row, so a best-effort step that
+        # failed (counts left at zero, say) is still visible in the report.
+        optional = self.config.get("build", {}).get("pre-command-optional", False)
+        hook_failed = bool(hook) and not hook.ok
+        if hook_failed and not optional:
             return self._fragment("build", ctx, hook, "pre-command failed")
+        if hook_failed:
+            note = " · pre-command failed, built without it"
         tag = docker.local_tag(self.config)
         # No `type=gha` cache: under devcontainers/ci the default buildx driver cannot export
         # cache and the runner's ACTIONS_* env is not forwarded, so the flags fail the build.
@@ -96,7 +102,8 @@ class Engine:
             return self._fragment("build", ctx, result, "docker build failed")
         size = docker.image_size(ctx, tag)
         summary = f"built `{tag}`" + (f" · {size}" if size else "") + note
-        return self._fragment("build", ctx, result, summary)
+        status = Status.warning if hook_failed else None
+        return self._fragment("build", ctx, result, summary, status=status)
 
     def _pre_build(self, ctx: RunContext) -> tuple[CmdResult | None, str]:
         """Run `[build] pre-command` ahead of `docker build`; returns its result (None when it did

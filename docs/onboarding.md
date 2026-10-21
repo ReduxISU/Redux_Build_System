@@ -65,6 +65,7 @@ ahead of it.
 [build]
 pre-command = "dotnet run --configuration Release --project Tools/ContributorStatsSync -- --counts-only"
 pre-command-local = false           # default; true also runs it on a laptop / local devcontainer
+pre-command-optional = false        # default; true builds anyway when it fails, and marks the row ⚠️
 ```
 
 - **It runs only in CI by default.** Such a hook typically rewrites tracked files, and doing that on
@@ -74,9 +75,12 @@ pre-command-local = false           # default; true also runs it on a laptop / l
 - **It sees the same environment as the rest of the run**, so `GITHUB_TOKEN` (and the other
   variables the workflow forwards) is available to it.
 - **A non-zero exit fails `build`** with `pre-command failed` and no image is built — so
-  `integration-test` and `push` are blocked too. rbs stays strict; if the step is best-effort for
-  your repo, make it non-fatal in the command itself, e.g.
-  `pre-command = "./stamp.sh || git checkout -- wwwroot/info.json"`.
+  `integration-test` and `push` are blocked too.
+- **For a best-effort step, set `pre-command-optional = true`.** A failed hook then doesn't stop
+  `docker build`: the image is built without it, and the `build` row shows ⚠️
+  `pre-command failed, built without it`. A warning still counts as passing, so
+  `integration-test` and `push` go ahead. Prefer this to making the command non-fatal itself
+  (`cmd || true`): that hides the failure, and the row shows ✅ `ran pre-command`.
 
 ### `[integration]` in full
 

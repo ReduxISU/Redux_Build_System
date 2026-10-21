@@ -3,6 +3,7 @@ from redux_build.context import RunContext
 from redux_build.engines import base as basemod
 from redux_build.engines.uv import UvEngine
 from redux_build.models import Status
+from redux_build.report import find_blocker, write_fragment
 from redux_build.runner import CmdResult
 
 
@@ -71,14 +72,22 @@ def test_build_failure(tmp_path, monkeypatch):
 HOOK = "dotnet run --project Tools/Stats -- --fill"
 
 
-def _hooked(tmp_path, monkeypatch, is_github=True, local=None, hook_rc=0):
+def _hooked(
+    tmp_path,
+    monkeypatch,
+    is_github=True,
+    local=None,
+    optional=None,
+    hook_rc=0,
+    docker_rc=0,
+):
     """Build with a `[build] pre-command`; returns the fragment and every (cmd, kwargs) run."""
     (tmp_path / "Dockerfile").write_text("FROM alpine\n")
     seen = []
 
     def _run(cmd, *_args, **kwargs):
         seen.append((cmd, kwargs))
-        rc = hook_rc if cmd == HOOK else 0
+        rc = hook_rc if cmd == HOOK else docker_rc
         return CmdResult(rc=rc, out="", duration_s=1.0)
 
     monkeypatch.setattr(basemod, "run", _run)
@@ -86,6 +95,8 @@ def _hooked(tmp_path, monkeypatch, is_github=True, local=None, hook_rc=0):
     build = {"pre-command": HOOK}
     if local is not None:
         build["pre-command-local"] = local
+    if optional is not None:
+        build["pre-command-optional"] = optional
     ctx = RunContext(cwd=tmp_path, is_github=is_github, env={"GITHUB_TOKEN": "tok"})
     frag = UvEngine({"package": "demo", "build": build}).build(ctx)
     return frag, seen
@@ -126,6 +137,41 @@ def test_pre_command_failure_fails_build_without_docker(tmp_path, monkeypatch):
     assert frag.summary == "pre-command failed"
     assert frag.duration_s == 1.0
     assert [cmd for cmd, _ in seen] == [HOOK]
+
+
+def test_pre_command_then_docker_failure_fails_build(tmp_path, monkeypatch):
+    frag, seen = _hooked(tmp_path, monkeypatch, docker_rc=1)
+    assert [cmd for cmd, _ in seen][0] == HOOK
+    assert frag.status == Status.failure
+    assert frag.summary == "docker build failed"
+    assert frag.duration_s == 2.0
+
+
+def test_optional_pre_command_failure_builds_with_warning(tmp_path, monkeypatch):
+    # A best-effort hook that failed still ships an image, but the report must say so.
+    frag, seen = _hooked(tmp_path, monkeypatch, optional=True, hook_rc=1)
+    assert seen[1][0][:3] == ["docker", "buildx", "build"]
+    assert frag.status == Status.warning
+    assert frag.summary.endswith(" · pre-command failed, built without it")
+    assert frag.duration_s == 2.0
+
+
+def test_optional_pre_command_warning_does_not_block(tmp_path, monkeypatch):
+    frag, _ = _hooked(tmp_path, monkeypatch, optional=True, hook_rc=1)
+    report_dir = tmp_path / "report"
+    write_fragment(
+        RunContext(
+            cwd=tmp_path, is_github=True, env={"RBS_REPORT_DIR": str(report_dir)}
+        ),
+        frag,
+    )
+    assert find_blocker(report_dir, ["build"]) is None
+
+
+def test_optional_pre_command_success_stays_success(tmp_path, monkeypatch):
+    frag, _ = _hooked(tmp_path, monkeypatch, optional=True)
+    assert frag.status == Status.success
+    assert frag.summary.endswith(" · ran pre-command")
 
 
 def test_pre_command_skipped_outside_ci(tmp_path, monkeypatch):
