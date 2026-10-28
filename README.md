@@ -436,6 +436,45 @@ Why permissions are declared in the **caller**: a reusable workflow can only nar
 scope, never widen it. Fork PRs get a read-only token and no secrets — push and comment are skipped
 by design, and the report still renders in the job summary.
 
+### Closing finished parent issues
+
+The hub also has **`close-finished-parents.yml`**, a reusable workflow that closes a parent issue
+once every one of its sub-issues is closed. GitHub leaves a parent open when its last sub-issue
+closes, so a piece of work split into one sub-issue per PR (backend, front ends, SPADE) would
+otherwise need closing by hand. Only open issues with the label `close-when-subissues-done` are
+closed, so tracker issues that just group work stay open.
+
+It goes in the same `rbs.yml` as a second job, so a repo gains no workflow file:
+
+```yaml
+on:
+  pull_request:
+  push: { branches: [main] }
+  issues: { types: [closed] }           # a sub-issue in this repo closed
+  schedule: [{ cron: '17 * * * *' }]    # hourly, for sub-issues in other repos
+  workflow_dispatch:
+
+concurrency:
+  # The event name keeps an hourly run from cancelling a push run on the same branch.
+  group: rbs-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    uses: ReduxISU/Redux_Build_System/.github/workflows/ci.yml@main
+    secrets: inherit
+
+  close-parents:
+    if: github.event_name == 'issues' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    uses: ReduxISU/Redux_Build_System/.github/workflows/close-finished-parents.yml@main
+    permissions:
+      issues: write
+```
+
+Each repo closes only its own parents with its own token, so no secret is needed. The hourly run
+catches sub-issues closed in another repo, which doesn't trigger this one.
+
 ### The report (Goal B)
 
 Each operation drops a JSON fragment; each job uploads its fragments as an artifact; a final job

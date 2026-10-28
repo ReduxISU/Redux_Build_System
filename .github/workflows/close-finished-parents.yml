@@ -1,0 +1,49 @@
+name: close finished parent issues
+
+# Reusable: each repo calls this from its own rbs.yml, on an issue closing and hourly, so no repo
+# needs a workflow file of its own for it. It closes the calling repo's open issues that carry
+# the label once every one of their sub-issues is closed. GitHub doesn't close a parent when its
+# last sub-issue closes. The label keeps tracker issues, which only group work and stay open, out
+# of it. Only the caller's own issues are touched, so its default token is enough; the caller
+# must grant `issues: write`.
+on:
+  workflow_call:
+    inputs:
+      label:
+        description: Parents with this label are closed once all their sub-issues are closed.
+        type: string
+        default: close-when-subissues-done
+
+permissions:
+  issues: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Close labeled parents whose sub-issues are all closed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # github.repository, not github.event.repository: scheduled runs have no repository
+          # in their event payload.
+          REPOSITORY: ${{ github.repository }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          owner=${REPOSITORY%%/*}
+          repo=${REPOSITORY#*/}
+          gh issue list -R "$REPOSITORY" --label "$LABEL" --state open --limit 100 \
+            --json number -q '.[].number' |
+          while read -r number; do
+            summary=$(gh api graphql \
+              -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){subIssuesSummary{total completed}}}}' \
+              -f owner="$owner" -f repo="$repo" -F number="$number" \
+              -q '.data.repository.issue.subIssuesSummary | "\(.total) \(.completed)"')
+            read -r total completed <<< "$summary"
+            echo "#$number: $completed of $total sub-issues closed"
+            # A parent with no sub-issues yet is left alone.
+            if [ "$total" -gt 0 ] && [ "$completed" -eq "$total" ]; then
+              gh issue close "$number" -R "$REPOSITORY" --reason completed \
+                --comment "All $total sub-issues are closed, so this is done."
+            fi
+          done
