@@ -232,6 +232,20 @@ def test_duplicate_diagnostics_deduped(tmp_path, monkeypatch):
     assert len(frag.findings) == 1
 
 
+def test_diagnostic_after_a_build_line_keeps_its_location(tmp_path, monkeypatch):
+    # #8: each copy follows a different build line, which the file name used to swallow.
+    warning = "/src/Gen.cs(37,22): warning CS3021: not needed [/src/API.csproj]\n"
+    out = (
+        "  Determining projects to restore...\n"
+        + warning
+        + "  API -> /src/bin/Release/net6.0/API.dll\n"
+        + warning
+    )
+    monkeypatch.setattr(basemod, "run", _fixed(0, out))
+    frag = DotnetEngine({}).lint(_ctx(tmp_path))
+    assert [finding.location for finding in frag.findings] == ["/src/Gen.cs:37"]
+
+
 def test_lint_failure_without_parsable_diagnostics(tmp_path, monkeypatch):
     monkeypatch.setattr(basemod, "run", _fixed(1, "MSB1011: ambiguous project"))
     frag = DotnetEngine({}).lint(_ctx(tmp_path))
