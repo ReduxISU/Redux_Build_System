@@ -19,8 +19,11 @@ _SEVERITY_ORDER = ["critical", "high", "moderate", "low", "error", "warning"]
 
 # MSBuild diagnostic line, emitted identically by `dotnet build` and `dotnet format`:
 #   src/File.cs(46,25): error WHITESPACE: Fix whitespace formatting. [/src/proj.csproj]
+# Held to one line ([ \t]*, [^(\n]*): otherwise the file name can begin on the build line before
+# it ("API -> …/API.dll" + newline + "src/File.cs"), so each copy MSBuild prints gets its own
+# location and survives the dedupe in _diagnostics (#8).
 _DIAGNOSTIC = re.compile(
-    r"^\s*(?P<file>[^\s(][^(]*)\((?P<line>\d+),\d+\):\s+"
+    r"^[ \t]*(?P<file>[^\s(][^(\n]*)\((?P<line>\d+),\d+\):\s+"
     r"(?P<severity>error|warning)\s+(?P<code>[^:\s]+):\s+(?P<message>.*)$",
     re.MULTILINE,
 )
