@@ -88,8 +88,9 @@ about it are worth knowing:
   `"test": {"runner": "Microsoft.Testing.Platform"}` (needed for xunit.v3 4.x on the .NET 10 SDK)
   is run the Microsoft Testing Platform way: `dotnet test --solution …`, coverage from
   `Microsoft.Testing.Extensions.CodeCoverage`, counts from MTP's `Test run summary:` block. Every
-  other repo gets the VSTest command above, unchanged. `[unit-test] runner` forces one and
-  `[unit-test] filter` adds `--filter`; see [`docs/onboarding.md`](docs/onboarding.md#unit-test-for-a-net-repo).
+  other repo gets the VSTest command above, unchanged. `[unit-test] runner` (`"auto"`, `"vstest"`
+  or `"mtp"`, lowercase) forces one and `[unit-test] filter` adds `--filter` (under MTP that needs
+  xunit.v3 4.0 or later); see [`docs/onboarding.md`](docs/onboarding.md#unit-test-for-a-net-repo).
 
 The solution is always named explicitly (`solution` in `rbs.toml`, else the single `*.slnx`/`*.sln`
 found on disk) because a bare `dotnet build` errors MSB1011 when a `.csproj` sits beside it.

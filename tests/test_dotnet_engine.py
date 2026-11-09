@@ -715,3 +715,98 @@ def test_mtp_without_the_coverage_package_reruns_without_coverage(
     )
     assert frag.duration_s == 1.5
     assert frag.metrics == {}
+
+
+def test_mtp_coverage_fallback_drops_the_covered_projects_reports(
+    tmp_path, monkeypatch
+):
+    # A solution where one project has the extension and another does not: the first run writes
+    # the covered project's report and then fails on the other. That report covers part of the
+    # solution only, so the row must not show or gate on it, and the rerun starts clean.
+    seen = []
+
+    def _run(cmd, *_args, **_kwargs):
+        seen.append(cmd)
+        results = Path(_results_dir(cmd))
+        if len(seen) == 1:
+            (results / "41749663-7ce4.cobertura.xml").write_text(_cobertura(87, 100))
+            return CmdResult(1, MTP_NO_COVERAGE_PACKAGE, 0.5)
+        assert list(results.iterdir()) == []
+        return CmdResult(0, MTP_PASSED, 1.0)
+
+    monkeypatch.setattr(basemod, "run", _run)
+    config = {"unit-test": {"coverage-min": 95}}
+    frag = DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert len(seen) == 2
+    assert _results_dir(seen[0]) != _results_dir(seen[1])
+    assert frag.status == Status.success
+    assert frag.summary == (
+        "2 passed · no coverage: reference `Microsoft.Testing.Extensions.CodeCoverage`"
+    )
+    assert frag.metrics == {}
+
+
+# What xunit.v3 before 4.0 prints under MTP for `--filter` (same shape as the --coverage refusal).
+MTP_NO_FILTER = """\
+/src/mtp/Lib.Tests/bin/Release/net10.0/Lib.Tests.dll (net10.0) Zero tests ran
+Exit code: 5
+  Standard output: Unknown option '--filter'
+
+Test run summary: Zero tests ran
+  error: 1
+
+  total: 0
+  failed: 0
+  succeeded: 0
+  skipped: 0
+  duration: 510ms
+Test run completed with non-success exit code: 1 (see: https://aka.ms/testingplatform/exitcodes)
+"""
+
+
+def test_mtp_refused_filter_says_why(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(1, MTP_NO_FILTER))
+    config = {"unit-test": {"filter": "Category!=Performance"}}
+    frag = DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.status == Status.failure
+    assert frag.summary == (
+        "no tests ran · `filter` refused: under MTP it needs xunit.v3 4.0 or later"
+    )
+
+
+def test_mtp_refused_filter_after_the_coverage_fallback_says_why(tmp_path, monkeypatch):
+    outputs = iter(
+        [
+            CmdResult(1, MTP_NO_COVERAGE_PACKAGE + MTP_NO_FILTER, 0.5),
+            CmdResult(1, MTP_NO_FILTER, 0.5),
+        ]
+    )
+    monkeypatch.setattr(basemod, "run", lambda *_a, **_k: next(outputs))
+    config = {"unit-test": {"filter": "Category!=Performance"}}
+    frag = DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.summary == (
+        "no tests ran · no coverage: reference `Microsoft.Testing.Extensions.CodeCoverage`"
+        " · `filter` refused: under MTP it needs xunit.v3 4.0 or later"
+    )
+
+
+def test_non_string_filter_fails_without_running(tmp_path, monkeypatch):
+    (tmp_path / "vstest").mkdir()
+    (tmp_path / "mtp").mkdir()
+    repos = (tmp_path / "vstest", _mtp_repo(tmp_path / "mtp"))
+    for value, shown in ((3, "3"), (["A", "B"], "['A', 'B']"), (True, "True")):
+        for repo in repos:
+            seen = []
+            monkeypatch.setattr(basemod, "run", _capture(seen))
+            config = {"unit-test": {"filter": value}}
+            frag = DotnetEngine(config).unit_test(_ctx(repo))
+            assert seen == []
+            assert frag.status == Status.failure
+            assert frag.summary == f"`[unit-test] filter` must be a string, got {shown}"
+
+
+def test_empty_filter_means_unset(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=TEST_OUT))
+    DotnetEngine({"unit-test": {"filter": ""}}).unit_test(_ctx(tmp_path))
+    assert "--filter" not in seen[0]

@@ -87,8 +87,8 @@ pre-command-optional = false        # default; true builds anyway when it fails,
 ```toml
 [unit-test]
 coverage-min = 80                   # fail below this line coverage; default 0
-filter = "Category!=Performance"    # optional; passed to `dotnet test --filter`
-runner = "auto"                     # default; or "vstest" / "mtp" to force one
+filter = "Category!=Performance"    # optional string; passed to `dotnet test --filter`
+runner = "auto"                     # default; or "vstest" / "mtp" to force one (lowercase)
 ```
 
 `dotnet test` runs in one of two modes, and the engine follows the one the repo is in:
@@ -110,25 +110,31 @@ runner = "auto"                     # default; or "vstest" / "mtp" to force one
   `PackageReference`, or one in `Directory.Build.props`). Without it MTP refuses `--coverage` and
   runs nothing, so the engine runs the tests again without it and the row reads
   `no coverage: reference Microsoft.Testing.Extensions.CodeCoverage`, with no coverage gate, as a
-  VSTest project without coverlet gets none. Keep that package's major version in step with
-  xunit's: CodeCoverage 18.x is MTP v2 (xunit.v3 4.x); paired with xunit.v3 3.x (MTP v1) the test
-  host crashes. A Dependabot group that bumps them together avoids it.
+  VSTest project without coverlet gets none. That holds when only some test projects lack the
+  package: the others' partial coverage is not reported, and they run twice (once per pass). Keep
+  that package's major version in step with xunit's: CodeCoverage 18.x is MTP v2 (xunit.v3 4.x);
+  paired with xunit.v3 3.x (MTP v1) the test host crashes. A Dependabot group that bumps them together avoids it.
 
 `runner = "auto"` decides the way the SDK does: the nearest `global.json` at or above the repo root
 counts (even one with no `test` section), and the mode is MTP when its `test.runner` is
 `Microsoft.Testing.Platform` (the value in any case; comments and trailing commas allowed). Set
 `"vstest"` or `"mtp"` only if rbs runs somewhere that resolves global.json differently.
 
-`filter` is passed as is in both modes. xunit.v3 (like MSTest and NUnit) accepts the VSTest filter
-syntax under MTP too, so `Category!=Performance` needs no rewriting; xunit's own MTP spelling of it
-is `--filter-not-trait "Category=Performance"` (and `Category=Performance` is `--filter-trait
-"Category=Performance"`), which is what a workflow calling `dotnet test` directly may use instead.
+`filter` is passed as is in both modes; it must be a string (anything else fails the row
+without running tests), and `""` means no filter. Under MTP, xunit.v3 accepts the VSTest filter
+syntax from **xunit.v3 4.0** on, so `Category!=Performance` needs no rewriting there. An older
+xunit.v3 refuses `--filter` and runs nothing; the row then adds `` `filter` refused: under MTP it
+needs xunit.v3 4.0 or later ``. xunit's own MTP spelling of the filter is `--filter-not-trait
+"Category=Performance"` (and `Category=Performance` is `--filter-trait "Category=Performance"`),
+which is what a workflow calling `dotnet test` directly may use instead.
 
 Two differences an MTP repo will see: MTP fails a run in which no test ran (exit 8, shown as `no
 tests ran`), where VSTest passes it; and `[integration] command` must use the MTP form too, since
 `dotnet test path/To.csproj` is refused there: `dotnet test --project path/To.csproj` (MTP only),
 or `dotnet run --project path/To.csproj`, which works in both modes for an xunit.v3 test project.
-The integration row reads its counts from either runner's output.
+The integration row's counts come from the generic `N passed` / `N failed` wording or, failing
+that, from MTP's `Test run summary:` block; VSTest's `Passed!  - Failed: 0, Passed: N` line is not
+read there, so a VSTest integration suite shows no counts unless its output has that generic wording.
 
 ### `[integration]` in full
 

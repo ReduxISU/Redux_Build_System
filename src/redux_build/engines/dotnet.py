@@ -20,6 +20,9 @@ RUNNERS = ("auto", "vstest", "mtp")
 # What an MTP repo references for coverage, and what MTP says when a project lacks it.
 MTP_COVERAGE_PACKAGE = "Microsoft.Testing.Extensions.CodeCoverage"
 _MTP_NO_COVERAGE = "Unknown option '--coverage'"
+# What MTP says when the test framework does not take `--filter` (xunit.v3 before 4.0).
+_MTP_NO_FILTER = "Unknown option '--filter'"
+_MTP_FILTER_HINT = " · `filter` refused: under MTP it needs xunit.v3 4.0 or later"
 _MTP_RUNNER = "microsoft.testing.platform"
 _PROJECT_SUFFIXES = (".csproj", ".fsproj", ".vbproj")
 
@@ -117,6 +120,14 @@ class DotnetEngine(Engine):
                 f"unknown `[unit-test] runner` {runner!r}; use "
                 + ", ".join(f"`{name}`" for name in RUNNERS),
             )
+        expression = settings.get("filter")
+        if expression is not None and not isinstance(expression, str):
+            return self._fragment(
+                "unit-test",
+                ctx,
+                CmdResult(rc=1, out="", duration_s=0.0),
+                f"`[unit-test] filter` must be a string, got {expression!r}",
+            )
         if runner == "mtp" or (runner == "auto" and uses_mtp(ctx.cwd)):
             return self._unit_test_mtp(ctx)
         # Coverage goes to a fresh temp dir so a previous run's report can never be counted;
@@ -152,29 +163,39 @@ class DotnetEngine(Engine):
         test project would write the same file name.
         """
         coverage_args = ["--coverage", "--coverage-output-format", "cobertura"]
+        cmd = [
+            "dotnet",
+            "test",
+            *_mtp_target(_solution(self.config, ctx)),
+            "-c",
+            CONFIGURATION,
+            "--no-ansi",
+            "--no-progress",
+        ]
         note = ""
         with tempfile.TemporaryDirectory() as results:
-            cmd = [
-                "dotnet",
-                "test",
-                *_mtp_target(_solution(self.config, ctx)),
-                "-c",
-                CONFIGURATION,
-                "--no-ansi",
-                "--no-progress",
-                "--results-directory",
-                results,
-            ]
-            result = self._exec([*cmd, *coverage_args, *self._filter()], ctx)
-            if _MTP_NO_COVERAGE in result.out:
-                # A project without the extension rejects --coverage and runs nothing. Like a
-                # VSTest project without coverlet.collector, it then gets no coverage gate, so
-                # run again without the flags and say why coverage is missing.
-                first = result
-                result = self._exec([*cmd, *self._filter()], ctx)
-                result.duration_s = round(result.duration_s + first.duration_s, 2)
-                note = f" · no coverage: reference `{MTP_COVERAGE_PACKAGE}`"
+            result = self._exec(
+                [*cmd, "--results-directory", results, *coverage_args, *self._filter()],
+                ctx,
+            )
             coverage = _coverage(Path(results), "*.cobertura.xml")
+        if _MTP_NO_COVERAGE in result.out:
+            # A project without the extension rejects --coverage and runs nothing. Like a
+            # VSTest project without coverlet.collector, it then gets no coverage gate, so
+            # run again without the flags and say why coverage is missing. The projects that
+            # do have the extension wrote reports in the first run; they cover only part of
+            # the solution, so they are dropped rather than gated on, and the rerun gets a
+            # fresh results directory.
+            first = result
+            with tempfile.TemporaryDirectory() as results:
+                result = self._exec(
+                    [*cmd, "--results-directory", results, *self._filter()], ctx
+                )
+            result.duration_s = round(result.duration_s + first.duration_s, 2)
+            coverage = None
+            note = f" · no coverage: reference `{MTP_COVERAGE_PACKAGE}`"
+        if _MTP_NO_FILTER in result.out:
+            note += _MTP_FILTER_HINT
         return self._unit_test_fragment(
             ctx, result, _mtp_summary(result.out) + note, coverage
         )
@@ -182,9 +203,11 @@ class DotnetEngine(Engine):
     def _filter(self) -> list[str]:
         """`--filter <expression>` from `[unit-test] filter`, or nothing when it is unset.
 
-        The same flag in both runners: xunit.v3 (and MSTest/NUnit) accept the VSTest filter
-        syntax under Microsoft Testing Platform too, so `Category!=Performance` needs no
-        translation (xunit's own spelling of it there is `--filter-not-trait Category=Performance`).
+        The same flag in both runners. Under Microsoft Testing Platform xunit.v3 accepts the
+        VSTest filter syntax from 4.0 on, so `Category!=Performance` needs no translation there
+        (xunit's own spelling of it is `--filter-not-trait Category=Performance`); an older
+        xunit.v3 refuses `--filter`, and the summary then says so (see _MTP_FILTER_HINT).
+        `unit_test` has already refused a value that is not a string; "" means unset.
         """
         expression = self.config.get("unit-test", {}).get("filter")
         return ["--filter", expression] if expression else []
