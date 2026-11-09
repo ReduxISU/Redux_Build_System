@@ -84,6 +84,12 @@ about it are worth knowing:
   writes to a temp directory. Reports from several test projects are *summed*, not averaged, so a
   small fully-covered project cannot mask a large bare one. A project without the collector simply
   gets no coverage gate rather than a spurious 0%.
+- **`unit-test` follows the repo's test runner.** A repo whose `global.json` sets
+  `"test": {"runner": "Microsoft.Testing.Platform"}` (needed for xunit.v3 4.x on the .NET 10 SDK)
+  is run the Microsoft Testing Platform way: `dotnet test --solution …`, coverage from
+  `Microsoft.Testing.Extensions.CodeCoverage`, counts from MTP's `Test run summary:` block. Every
+  other repo gets the VSTest command above, unchanged. `[unit-test] runner` forces one and
+  `[unit-test] filter` adds `--filter`; see [`docs/onboarding.md`](docs/onboarding.md#unit-test-for-a-net-repo).
 
 The solution is always named explicitly (`solution` in `rbs.toml`, else the single `*.slnx`/`*.sln`
 found on disk) because a bare `dotnet build` errors MSB1011 when a `.csproj` sits beside it.
@@ -282,7 +288,7 @@ dockerfile = "Dockerfile"                  # optional, default "Dockerfile"
 context = "."                              # optional, default "."
 ```
 
-**Consumed today:** `engine`, `package`, `unit-test.{coverage-min,python-versions}`,
+**Consumed today:** `engine`, `package`, `unit-test.{coverage-min,python-versions,filter,runner}`,
 `artifact.{image,name,dockerfile,context,port,health-path}`, `build.{pre-command,pre-command-local,pre-command-optional}`,
 `integration.{command,timeout,env,services}`, `push.on-branch`.
 The full `[integration]` schema — dependency services, their environment, and the
