@@ -11,9 +11,20 @@ from redux_build.context import RunContext
 from redux_build.engines.base import Engine
 from redux_build.models import Finding, Fragment, Status
 from redux_build.runner import CmdResult
-from redux_build.text import relative
+from redux_build.text import mtp_counts, relative
 
 CONFIGURATION = "Release"
+
+# `[unit-test] runner`: "auto" reads global.json (see uses_mtp); the others force a runner.
+RUNNERS = ("auto", "vstest", "mtp")
+# What an MTP repo references for coverage, and what MTP says when a project lacks it.
+MTP_COVERAGE_PACKAGE = "Microsoft.Testing.Extensions.CodeCoverage"
+_MTP_NO_COVERAGE = "Unknown option '--coverage'"
+# What MTP says when the test framework does not take `--filter` (xunit.v3 before 4.0).
+_MTP_NO_FILTER = "Unknown option '--filter'"
+_MTP_FILTER_HINT = " · `filter` refused: under MTP it needs xunit.v3 4.0 or later"
+_MTP_RUNNER = "microsoft.testing.platform"
+_PROJECT_SUFFIXES = (".csproj", ".fsproj", ".vbproj")
 
 _SEVERITY_ORDER = ["critical", "high", "moderate", "low", "error", "warning"]
 
@@ -99,6 +110,26 @@ class DotnetEngine(Engine):
         return self.skipped("typecheck", "covered by `lint` (dotnet build)", ctx)
 
     def unit_test(self, ctx: RunContext) -> Fragment:
+        settings = self.config.get("unit-test", {})
+        runner = settings.get("runner", "auto")
+        if runner not in RUNNERS:
+            return self._fragment(
+                "unit-test",
+                ctx,
+                CmdResult(rc=1, out="", duration_s=0.0),
+                f"unknown `[unit-test] runner` {runner!r}; use "
+                + ", ".join(f"`{name}`" for name in RUNNERS),
+            )
+        expression = settings.get("filter")
+        if expression is not None and not isinstance(expression, str):
+            return self._fragment(
+                "unit-test",
+                ctx,
+                CmdResult(rc=1, out="", duration_s=0.0),
+                f"`[unit-test] filter` must be a string, got {expression!r}",
+            )
+        if runner == "mtp" or (runner == "auto" and uses_mtp(ctx.cwd)):
+            return self._unit_test_mtp(ctx)
         # Coverage goes to a fresh temp dir so a previous run's report can never be counted;
         # instrumentation needs a real build, so this deliberately does not pass --no-build.
         with tempfile.TemporaryDirectory() as results:
@@ -112,12 +143,83 @@ class DotnetEngine(Engine):
                     "XPlat Code Coverage",
                     "--results-directory",
                     results,
+                    *self._filter(),
                 ),
                 ctx,
             )
             coverage = _coverage(Path(results))
+        return self._unit_test_fragment(
+            ctx, result, _test_summary(result.out), coverage
+        )
+
+    def _unit_test_mtp(self, ctx: RunContext) -> Fragment:
+        """`unit-test` for a repo whose global.json selects Microsoft Testing Platform.
+
+        In that mode `dotnet test` takes the solution as `--solution` (a bare path is refused),
+        and VSTest's `--collect` is an unknown option; coverage comes from the
+        Microsoft.Testing.Extensions.CodeCoverage extension instead. `--no-ansi` because MTP
+        writes colour codes even into a pipe when CI=true, and `--no-progress` keeps its live
+        progress line out of the log. No `--coverage-output`: with it every
+        test project would write the same file name.
+        """
+        coverage_args = ["--coverage", "--coverage-output-format", "cobertura"]
+        cmd = [
+            "dotnet",
+            "test",
+            *_mtp_target(_solution(self.config, ctx)),
+            "-c",
+            CONFIGURATION,
+            "--no-ansi",
+            "--no-progress",
+        ]
+        note = ""
+        with tempfile.TemporaryDirectory() as results:
+            result = self._exec(
+                [*cmd, "--results-directory", results, *coverage_args, *self._filter()],
+                ctx,
+            )
+            coverage = _coverage(Path(results), "*.cobertura.xml")
+        if _MTP_NO_COVERAGE in result.out:
+            # A project without the extension rejects --coverage and runs nothing. Like a
+            # VSTest project without coverlet.collector, it then gets no coverage gate, so
+            # run again without the flags and say why coverage is missing. The projects that
+            # do have the extension wrote reports in the first run; they cover only part of
+            # the solution, so they are dropped rather than gated on, and the rerun gets a
+            # fresh results directory.
+            first = result
+            with tempfile.TemporaryDirectory() as results:
+                result = self._exec(
+                    [*cmd, "--results-directory", results, *self._filter()], ctx
+                )
+            result.duration_s = round(result.duration_s + first.duration_s, 2)
+            coverage = None
+            note = f" · no coverage: reference `{MTP_COVERAGE_PACKAGE}`"
+        if _MTP_NO_FILTER in result.out:
+            note += _MTP_FILTER_HINT
+        return self._unit_test_fragment(
+            ctx, result, _mtp_summary(result.out) + note, coverage
+        )
+
+    def _filter(self) -> list[str]:
+        """`--filter <expression>` from `[unit-test] filter`, or nothing when it is unset.
+
+        The same flag in both runners. Under Microsoft Testing Platform xunit.v3 accepts the
+        VSTest filter syntax from 4.0 on, so `Category!=Performance` needs no translation there
+        (xunit's own spelling of it is `--filter-not-trait Category=Performance`); an older
+        xunit.v3 refuses `--filter`, and the summary then says so (see _MTP_FILTER_HINT).
+        `unit_test` has already refused a value that is not a string; "" means unset.
+        """
+        expression = self.config.get("unit-test", {}).get("filter")
+        return ["--filter", expression] if expression else []
+
+    def _unit_test_fragment(
+        self,
+        ctx: RunContext,
+        result: CmdResult,
+        summary: str,
+        coverage: float | None,
+    ) -> Fragment:
         minimum = self.config.get("unit-test", {}).get("coverage-min", 0)
-        summary = _test_summary(result.out)
         status = None
         if coverage is not None:
             summary += f" · coverage {coverage:.0f}%"
@@ -149,6 +251,55 @@ def _solution(config: dict, ctx: RunContext) -> str:
         if matches:
             return matches[0].name
     return "."
+
+
+def _mtp_target(solution: str) -> list[str]:
+    """How MTP-mode `dotnet test` is pointed at what to run: `--project` for a project file,
+    `--solution` otherwise, and nothing at all when no solution was found (it then looks in the
+    working directory itself, as a bare `dotnet test` does)."""
+    if solution == ".":
+        return []
+    if Path(solution).suffix.lower() in _PROJECT_SUFFIXES:
+        return ["--project", solution]
+    return ["--solution", solution]
+
+
+def uses_mtp(cwd: Path) -> bool:
+    """Whether `dotnet test` run in `cwd` is in Microsoft Testing Platform mode.
+
+    Resolved as the SDK does: the nearest global.json at or above `cwd` decides, even when it
+    has no `test` section, and the mode is MTP when its `test.runner` is
+    `Microsoft.Testing.Platform`. Keys are matched exactly and the value case-insensitively;
+    comments and trailing commas are allowed. An unreadable file means VSTest, today's
+    behaviour.
+    """
+    for folder in (cwd, *cwd.parents):
+        path = folder / "global.json"
+        if path.is_file():
+            try:
+                document = json.loads(
+                    _strip_jsonc(path.read_text(encoding="utf-8-sig"))
+                )
+            except (OSError, ValueError):
+                return False
+            test = document.get("test") if isinstance(document, dict) else None
+            runner = test.get("runner") if isinstance(test, dict) else None
+            return isinstance(runner, str) and runner.lower() == _MTP_RUNNER
+    return False
+
+
+_JSON_STRING = r'(?P<string>"(?:[^"\\]|\\.)*")'
+_JSONC_COMMENT = re.compile(_JSON_STRING + r"|//[^\n]*|/\*.*?\*/", re.S)
+_JSONC_TRAILING_COMMA = re.compile(_JSON_STRING + r"|,(?=\s*[}\]])")
+
+
+def _strip_jsonc(text: str) -> str:
+    """global.json may carry `//` and `/* */` comments and trailing commas; strings are kept.
+    Comments go first, so a comma followed by a comment and then `}` is still trailing.
+    """
+    for pattern in (_JSONC_COMMENT, _JSONC_TRAILING_COMMA):
+        text = pattern.sub(lambda match: match["string"] or "", text)
+    return text
 
 
 def _safe(parser, raw: str) -> list[Finding]:
@@ -242,14 +393,16 @@ def _lint_summary(result: CmdResult, findings: list[Finding]) -> str:
     return "0 issues" if result.ok else "build failed"
 
 
-def _coverage(results: Path) -> float | None:
+def _coverage(results: Path, name: str = "coverage.cobertura.xml") -> float | None:
     """Line coverage across every cobertura report the collector wrote.
 
     Summed rather than averaged so several test projects merge correctly. None when nothing was
-    produced — a project without `coverlet.collector` simply gets no coverage gate.
+    produced — a project without `coverlet.collector` simply gets no coverage gate. `name` is
+    the file pattern: coverlet writes `<guid>/coverage.cobertura.xml`, while MTP's CodeCoverage
+    extension writes `<guid>.cobertura.xml` straight into the results directory.
     """
     covered = valid = 0
-    for report in results.rglob("coverage.cobertura.xml"):
+    for report in results.rglob(name):
         try:
             root = ElementTree.parse(report).getroot()
         except ElementTree.ParseError:
@@ -268,3 +421,16 @@ def _test_summary(out: str) -> str:
         if count:
             parts.append(f"{count} {label.lower()}")
     return " · ".join(parts) if parts else "no tests reported"
+
+
+def _mtp_summary(out: str) -> str:
+    """The same "3 failed · 677 passed · 2 skipped" shape from MTP's `Test run summary:` block.
+    MTP counts a run where no test ran as a failure (exit 8, and 1 or 5 when a project was
+    refused), so that gets a summary of its own."""
+    counts = mtp_counts(out)
+    if counts is None:
+        return "no tests reported"
+    if not counts["total"]:
+        return "no tests ran"
+    named = (("failed", "failed"), ("succeeded", "passed"), ("skipped", "skipped"))
+    return " · ".join(f"{counts[key]} {label}" for key, label in named if counts[key])

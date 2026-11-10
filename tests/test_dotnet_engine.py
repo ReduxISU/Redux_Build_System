@@ -3,7 +3,7 @@ from pathlib import Path
 
 from redux_build.context import RunContext
 from redux_build.engines import base as basemod
-from redux_build.engines.dotnet import DotnetEngine
+from redux_build.engines.dotnet import DotnetEngine, uses_mtp
 from redux_build.models import Status
 from redux_build.runner import CmdResult
 
@@ -354,3 +354,459 @@ def test_collector_requested_with_a_clean_results_directory(tmp_path, monkeypatc
     DotnetEngine({}).unit_test(_ctx(tmp_path))
     assert "XPlat Code Coverage" in seen[0]
     assert "--no-build" not in seen[0]  # instrumentation needs a real build
+
+
+def _results_dir(cmd):
+    return cmd[cmd.index("--results-directory") + 1]
+
+
+def test_vstest_command_is_unchanged(tmp_path, monkeypatch):
+    # The exact command rbs ran before Microsoft Testing Platform support, for every VSTest repo.
+    (tmp_path / "Redux.slnx").write_text("")
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=TEST_OUT))
+    DotnetEngine({}).unit_test(_ctx(tmp_path))
+    assert seen[0] == [
+        "dotnet",
+        "test",
+        "Redux.slnx",
+        "-c",
+        "Release",
+        "--collect",
+        "XPlat Code Coverage",
+        "--results-directory",
+        _results_dir(seen[0]),
+    ]
+
+
+def test_vstest_filter_is_passed_through(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=TEST_OUT))
+    config = {"unit-test": {"filter": "Category!=Performance"}}
+    DotnetEngine(config).unit_test(_ctx(tmp_path))
+    assert seen[0][-2:] == ["--filter", "Category!=Performance"]
+
+
+# ── Microsoft Testing Platform ───────────────────────────────────────────────
+
+# Real `dotnet test --solution … --no-ansi` output from SDK 10.0.103, xunit.v3 4.0.3 and
+# Microsoft.Testing.Extensions.CodeCoverage 18.12.0 (paths shortened to /src).
+
+MTP_PASSED = """\
+Running tests from /src/mtp/Lib.Tests/bin/Release/net10.0/Lib.Tests.dll (net10.0|x64)
+/src/mtp/Lib.Tests/bin/Release/net10.0/Lib.Tests.dll (net10.0|x64) passed (2s 549ms)
+
+  In process file artifacts produced:
+    - /src/res1/41749663-7ce4-46bb-b856-5904913a2331.cobertura.xml
+
+Test run summary: Passed!
+  total: 2
+  failed: 0
+  succeeded: 2
+  skipped: 0
+  duration: 5s 977ms
+"""
+
+MTP_FAILED = """\
+Running tests from /src/mtp/Lib.Tests/bin/Release/net10.0/Lib.Tests.dll (net10.0|x64)
+failed Lib.Tests.CalcTests.PerformanceIsExcluded (32ms)
+  from /src/mtp/Lib.Tests/bin/Release/net10.0/Lib.Tests.dll (net10.0|x64)
+  the Category!=Performance filter should have excluded this test
+    at Lib.Tests.CalcTests.PerformanceIsExcluded() in /src/mtp/Lib.Tests/CalcTests.cs:16
+/src/mtp/Lib.Tests/bin/Release/net10.0/Lib.Tests.dll (net10.0|x64) failed with 1 error(s) (1s 179ms)
+Exit code: 2
+
+Test run summary: Failed!
+  total: 3
+  failed: 1
+  succeeded: 2
+  skipped: 0
+  duration: 1s 751ms
+Test run completed with non-success exit code: 2 (see: https://aka.ms/testingplatform/exitcodes)
+"""
+
+MTP_ZERO = """\
+Running tests from /src/mtp/Lib.Tests/bin/Release/net10.0/Lib.Tests.dll (net10.0|x64)
+/src/mtp/Lib.Tests/bin/Release/net10.0/Lib.Tests.dll (net10.0|x64) Zero tests ran (972ms)
+Exit code: 8
+
+Test run summary: Zero tests ran
+  error: 1
+
+  total: 0
+  failed: 0
+  succeeded: 0
+  skipped: 0
+  duration: 1s 557ms
+Test run completed with non-success exit code: 8 (see: https://aka.ms/testingplatform/exitcodes)
+"""
+
+MTP_NO_COVERAGE_PACKAGE = """\
+/src/mtp/Lib.Tests/bin/Release/net10.0/Lib.Tests.dll (net10.0) Zero tests ran
+Exit code: 5
+  Standard output: Unknown option '--coverage'
+  Option '--coverage' is provided by the 'Microsoft.Testing.Extensions.CodeCoverage' extension. Add a package reference to use it.
+  Unknown option '--coverage-output-format'
+  Option '--coverage-output-format' is provided by the 'Microsoft.Testing.Extensions.CodeCoverage' extension. Add a package reference to use it.
+
+Test run summary: Zero tests ran
+  error: 1
+
+  total: 0
+  failed: 0
+  succeeded: 0
+  skipped: 0
+  duration: 510ms
+Test run completed with non-success exit code: 1 (see: https://aka.ms/testingplatform/exitcodes)
+"""
+
+MTP_GLOBAL_JSON = '{\n  "test": {\n    "runner": "Microsoft.Testing.Platform"\n  }\n}\n'
+
+
+def _mtp_repo(tmp_path, solution="Sample.slnx"):
+    (tmp_path / "global.json").write_text(MTP_GLOBAL_JSON)
+    if solution:
+        (tmp_path / solution).write_text("")
+    return tmp_path
+
+
+def test_global_json_selects_mtp(tmp_path):
+    assert uses_mtp(_mtp_repo(tmp_path))
+
+
+def test_no_global_json_means_vstest(tmp_path):
+    assert not uses_mtp(tmp_path)
+
+
+def test_global_json_without_a_test_runner_means_vstest(tmp_path):
+    (tmp_path / "global.json").write_text('{"sdk": {"version": "10.0.103"}}')
+    assert not uses_mtp(tmp_path)
+
+
+def test_global_json_vstest_runner_means_vstest(tmp_path):
+    (tmp_path / "global.json").write_text('{"test": {"runner": "VSTest"}}')
+    assert not uses_mtp(tmp_path)
+
+
+def test_global_json_runner_value_is_case_insensitive(tmp_path):
+    (tmp_path / "global.json").write_text(
+        '{"test": {"runner": "microsoft.testing.platform"}}'
+    )
+    assert uses_mtp(tmp_path)
+
+
+def test_global_json_keys_are_case_sensitive(tmp_path):
+    # The SDK reads `test` / `runner` exactly; "Test" is just an unknown key to it.
+    (tmp_path / "global.json").write_text(
+        '{"Test": {"Runner": "Microsoft.Testing.Platform"}}'
+    )
+    assert not uses_mtp(tmp_path)
+
+
+def test_global_json_allows_comments_and_trailing_commas(tmp_path):
+    (tmp_path / "global.json").write_text(
+        "{\n"
+        "  // the SDK allows comments here\n"
+        '  "sdk": { "version": "10.0.103", /* pinned */ },\n'
+        '  "test": {\n'
+        '    "runner": "Microsoft.Testing.Platform", // MTP\n'
+        "  },\n"
+        "}\n"
+    )
+    assert uses_mtp(tmp_path)
+
+
+def test_comment_markers_inside_strings_are_kept(tmp_path):
+    (tmp_path / "global.json").write_text(
+        '{"msbuild-sdks": {"x": "http://a/*b*/"}, '
+        '"test": {"runner": "Microsoft.Testing.Platform"}}'
+    )
+    assert uses_mtp(tmp_path)
+
+
+def test_global_json_found_in_a_parent_folder(tmp_path):
+    _mtp_repo(tmp_path, solution=None)
+    nested = tmp_path / "repo"
+    nested.mkdir()
+    assert uses_mtp(nested)
+
+
+def test_nearest_global_json_wins(tmp_path):
+    # The SDK stops at the first global.json it finds, even one with no `test` section.
+    _mtp_repo(tmp_path, solution=None)
+    nested = tmp_path / "repo"
+    nested.mkdir()
+    (nested / "global.json").write_text('{"sdk": {"version": "10.0.103"}}')
+    assert not uses_mtp(nested)
+
+
+def test_malformed_global_json_means_vstest(tmp_path):
+    (tmp_path / "global.json").write_text("{ not json")
+    assert not uses_mtp(tmp_path)
+
+
+def test_mtp_command(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=MTP_PASSED))
+    DotnetEngine({}).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert seen == [
+        [
+            "dotnet",
+            "test",
+            "--solution",
+            "Sample.slnx",
+            "-c",
+            "Release",
+            "--no-ansi",
+            "--no-progress",
+            "--results-directory",
+            _results_dir(seen[0]),
+            "--coverage",
+            "--coverage-output-format",
+            "cobertura",
+        ]
+    ]
+
+
+def test_mtp_names_a_project_with_project(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=MTP_PASSED))
+    config = {"solution": "tests/Lib.Tests.csproj"}
+    DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path, solution=None)))
+    assert seen[0][2:4] == ["--project", "tests/Lib.Tests.csproj"]
+
+
+def test_mtp_without_a_solution_names_nothing(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=MTP_PASSED))
+    DotnetEngine({}).unit_test(_ctx(_mtp_repo(tmp_path, solution=None)))
+    assert seen[0][2:4] == ["-c", "Release"]
+
+
+def test_mtp_filter_is_passed_through(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=MTP_PASSED))
+    config = {"unit-test": {"filter": "Category!=Performance"}}
+    DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert seen[0][-2:] == ["--filter", "Category!=Performance"]
+
+
+def test_runner_mtp_forces_mtp_without_global_json(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=MTP_PASSED))
+    DotnetEngine({"unit-test": {"runner": "mtp"}}).unit_test(_ctx(tmp_path))
+    assert "--coverage" in seen[0]
+
+
+def test_runner_vstest_overrides_global_json(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=TEST_OUT))
+    config = {"unit-test": {"runner": "vstest"}}
+    frag = DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert seen[0][2] == "Sample.slnx"
+    assert "XPlat Code Coverage" in seen[0]
+    assert frag.summary == "680 passed"
+
+
+def test_unknown_runner_fails_without_running(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen))
+    frag = DotnetEngine({"unit-test": {"runner": "nunit"}}).unit_test(_ctx(tmp_path))
+    assert seen == []
+    assert frag.status == Status.failure
+    assert (
+        frag.summary
+        == "unknown `[unit-test] runner` 'nunit'; use `auto`, `vstest`, `mtp`"
+    )
+
+
+def test_mtp_reports_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(0, MTP_PASSED))
+    frag = DotnetEngine({}).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.status == Status.success
+    assert frag.summary == "2 passed"
+
+
+def test_mtp_reports_failures_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(2, MTP_FAILED))
+    frag = DotnetEngine({}).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.status == Status.failure
+    assert frag.summary == "1 failed · 2 passed"
+
+
+def test_mtp_counts_skipped(tmp_path, monkeypatch):
+    out = MTP_PASSED.replace("skipped: 0", "skipped: 4")
+    monkeypatch.setattr(basemod, "run", _fixed(0, out))
+    frag = DotnetEngine({}).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.summary == "2 passed · 4 skipped"
+
+
+def test_mtp_zero_tests_ran_fails(tmp_path, monkeypatch):
+    # MTP exits 8 when nothing ran (a filter that matched nothing, say); VSTest exits 0.
+    monkeypatch.setattr(basemod, "run", _fixed(8, MTP_ZERO))
+    frag = DotnetEngine({}).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.status == Status.failure
+    assert frag.summary == "no tests ran"
+
+
+def test_mtp_with_no_recognisable_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(1, "crashed"))
+    frag = DotnetEngine({}).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.summary == "no tests reported"
+
+
+def _with_mtp_coverage(monkeypatch, reports, out=MTP_PASSED):
+    """Stand in for the CodeCoverage extension: it writes <guid>.cobertura.xml files flat into
+    --results-directory, not into a folder per run as coverlet does."""
+
+    def _run(cmd, *_args, **_kwargs):
+        results = Path(_results_dir(cmd))
+        for index, body in enumerate(reports):
+            (results / f"4174966{index}-7ce4.cobertura.xml").write_text(body)
+        return CmdResult(rc=0, out=out, duration_s=0.1)
+
+    monkeypatch.setattr(basemod, "run", _run)
+
+
+def test_mtp_coverage_appended_to_the_summary(tmp_path, monkeypatch):
+    _with_mtp_coverage(monkeypatch, [_cobertura(2, 6)])
+    frag = DotnetEngine({}).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.summary == "2 passed · coverage 33%"
+    assert frag.metrics == {"coverage": 33.3}
+
+
+def test_mtp_coverage_from_several_projects_is_summed(tmp_path, monkeypatch):
+    _with_mtp_coverage(monkeypatch, [_cobertura(10, 10), _cobertura(0, 90)])
+    frag = DotnetEngine({}).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.summary == "2 passed · coverage 10%"
+
+
+def test_mtp_coverage_below_minimum_fails(tmp_path, monkeypatch):
+    _with_mtp_coverage(monkeypatch, [_cobertura(2, 6)])
+    config = {"unit-test": {"coverage-min": 80}}
+    frag = DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.status == Status.failure
+    assert frag.summary == "2 passed · coverage 33% (min 80%)"
+
+
+def test_mtp_without_the_coverage_package_reruns_without_coverage(
+    tmp_path, monkeypatch
+):
+    # Like a VSTest project without coverlet.collector: no coverage gate, and the row says why.
+    seen = []
+    outputs = iter(
+        [CmdResult(1, MTP_NO_COVERAGE_PACKAGE, 0.5), CmdResult(0, MTP_PASSED, 1.0)]
+    )
+
+    def _run(cmd, *_args, **_kwargs):
+        seen.append(cmd)
+        return next(outputs)
+
+    monkeypatch.setattr(basemod, "run", _run)
+    config = {"unit-test": {"coverage-min": 80, "filter": "Category!=Performance"}}
+    frag = DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert len(seen) == 2
+    assert "--coverage" in seen[0]
+    assert "--coverage" not in seen[1]
+    assert seen[1][-2:] == ["--filter", "Category!=Performance"]
+    assert frag.status == Status.success
+    assert frag.summary == (
+        "2 passed · no coverage: reference `Microsoft.Testing.Extensions.CodeCoverage`"
+    )
+    assert frag.duration_s == 1.5
+    assert frag.metrics == {}
+
+
+def test_mtp_coverage_fallback_drops_the_covered_projects_reports(
+    tmp_path, monkeypatch
+):
+    # A solution where one project has the extension and another does not: the first run writes
+    # the covered project's report and then fails on the other. That report covers part of the
+    # solution only, so the row must not show or gate on it, and the rerun starts clean.
+    seen = []
+
+    def _run(cmd, *_args, **_kwargs):
+        seen.append(cmd)
+        results = Path(_results_dir(cmd))
+        if len(seen) == 1:
+            (results / "41749663-7ce4.cobertura.xml").write_text(_cobertura(87, 100))
+            return CmdResult(1, MTP_NO_COVERAGE_PACKAGE, 0.5)
+        assert list(results.iterdir()) == []
+        return CmdResult(0, MTP_PASSED, 1.0)
+
+    monkeypatch.setattr(basemod, "run", _run)
+    config = {"unit-test": {"coverage-min": 95}}
+    frag = DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert len(seen) == 2
+    assert _results_dir(seen[0]) != _results_dir(seen[1])
+    assert frag.status == Status.success
+    assert frag.summary == (
+        "2 passed · no coverage: reference `Microsoft.Testing.Extensions.CodeCoverage`"
+    )
+    assert frag.metrics == {}
+
+
+# What xunit.v3 before 4.0 prints under MTP for `--filter` (same shape as the --coverage refusal).
+MTP_NO_FILTER = """\
+/src/mtp/Lib.Tests/bin/Release/net10.0/Lib.Tests.dll (net10.0) Zero tests ran
+Exit code: 5
+  Standard output: Unknown option '--filter'
+
+Test run summary: Zero tests ran
+  error: 1
+
+  total: 0
+  failed: 0
+  succeeded: 0
+  skipped: 0
+  duration: 510ms
+Test run completed with non-success exit code: 1 (see: https://aka.ms/testingplatform/exitcodes)
+"""
+
+
+def test_mtp_refused_filter_says_why(tmp_path, monkeypatch):
+    monkeypatch.setattr(basemod, "run", _fixed(1, MTP_NO_FILTER))
+    config = {"unit-test": {"filter": "Category!=Performance"}}
+    frag = DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.status == Status.failure
+    assert frag.summary == (
+        "no tests ran · `filter` refused: under MTP it needs xunit.v3 4.0 or later"
+    )
+
+
+def test_mtp_refused_filter_after_the_coverage_fallback_says_why(tmp_path, monkeypatch):
+    outputs = iter(
+        [
+            CmdResult(1, MTP_NO_COVERAGE_PACKAGE + MTP_NO_FILTER, 0.5),
+            CmdResult(1, MTP_NO_FILTER, 0.5),
+        ]
+    )
+    monkeypatch.setattr(basemod, "run", lambda *_a, **_k: next(outputs))
+    config = {"unit-test": {"filter": "Category!=Performance"}}
+    frag = DotnetEngine(config).unit_test(_ctx(_mtp_repo(tmp_path)))
+    assert frag.summary == (
+        "no tests ran · no coverage: reference `Microsoft.Testing.Extensions.CodeCoverage`"
+        " · `filter` refused: under MTP it needs xunit.v3 4.0 or later"
+    )
+
+
+def test_non_string_filter_fails_without_running(tmp_path, monkeypatch):
+    (tmp_path / "vstest").mkdir()
+    (tmp_path / "mtp").mkdir()
+    repos = (tmp_path / "vstest", _mtp_repo(tmp_path / "mtp"))
+    for value, shown in ((3, "3"), (["A", "B"], "['A', 'B']"), (True, "True")):
+        for repo in repos:
+            seen = []
+            monkeypatch.setattr(basemod, "run", _capture(seen))
+            config = {"unit-test": {"filter": value}}
+            frag = DotnetEngine(config).unit_test(_ctx(repo))
+            assert seen == []
+            assert frag.status == Status.failure
+            assert frag.summary == f"`[unit-test] filter` must be a string, got {shown}"
+
+
+def test_empty_filter_means_unset(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(basemod, "run", _capture(seen, out=TEST_OUT))
+    DotnetEngine({"unit-test": {"filter": ""}}).unit_test(_ctx(tmp_path))
+    assert "--filter" not in seen[0]
